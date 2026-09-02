@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Env & editor
+.env
+.env.local
+.vscode/
+.idea/
+.DS_Store
+
+# Local project context for Claude Code.
+# Deliberately untracked: it records in-progress decisions, machine-specific
+# setup notes and working preferences -- useful locally, but not something a
+# public portfolio repo should ship. Claude Code reads it directly from disk,
+# so ignoring it here does not hide it from tooling on this machine.
+# Caveat: it will NOT travel with a fresh clone. Keep a backup if this repo
+# ever becomes the only copy.
+# Both spellings listed because the file has been known by each, and ignore
+# matching is case-sensitive on Linux/macOS even though Windows is not.
+CLAUDE.md
+Claude.md
