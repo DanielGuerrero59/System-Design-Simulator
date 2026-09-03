@@ -7,7 +7,7 @@
  * replaces the design constant below; everything else here survives.
  */
 
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 
 import { API_BASE_URL, SimulationApiError, simulate } from './api/client'
 import type {
@@ -44,12 +44,20 @@ const STATUS_STYLES: Record<NodeStatus, string> = {
 }
 
 export default function App() {
-  const [trafficRps, setTrafficRps] = useState(1500)
+  // Held as the raw string being typed, not as a number. Number('') is 0, so
+  // numeric state would snap the field back to "0" the instant it is cleared --
+  // making it impossible to blank and retype, and letting a click on Simulate
+  // post a rate the backend rejects with a 422.
+  const [trafficInput, setTrafficInput] = useState('1500')
   const [result, setResult] = useState<SimulationResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
-  const runSimulation = useCallback(async () => {
+  const trafficRps = Number(trafficInput)
+  const isTrafficValid =
+    trafficInput.trim() !== '' && Number.isFinite(trafficRps) && trafficRps > 0
+
+  const runSimulation = async () => {
     setIsRunning(true)
     setError(null)
     try {
@@ -69,7 +77,7 @@ export default function App() {
     } finally {
       setIsRunning(false)
     }
-  }, [trafficRps])
+  }
 
   return (
     <main className="mx-auto max-w-3xl p-8 font-sans text-slate-800">
@@ -92,8 +100,8 @@ export default function App() {
             type="number"
             min={1}
             step={100}
-            value={trafficRps}
-            onChange={(event) => setTrafficRps(Number(event.target.value))}
+            value={trafficInput}
+            onChange={(event) => setTrafficInput(event.target.value)}
             className="w-48 rounded-md border border-slate-300 px-3 py-2
                        focus:border-slate-500 focus:outline-none"
           />
@@ -101,7 +109,7 @@ export default function App() {
         <button
           type="button"
           onClick={runSimulation}
-          disabled={isRunning}
+          disabled={isRunning || !isTrafficValid}
           className="rounded-md bg-slate-900 px-4 py-2 font-medium text-white
                      hover:bg-slate-700 disabled:cursor-not-allowed
                      disabled:bg-slate-400"
