@@ -8,8 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.simulation.constants import MAX_NODES
 
 client = TestClient(app)
+
+
+def _raise_value_error(*args: Any, **kwargs: Any) -> None:
+    raise ValueError("engine-level validation failure")
 
 
 def design(traffic_rps: float, **overrides: Any) -> dict[str, Any]:
@@ -159,11 +164,65 @@ class TestRejections:
         response = client.post("/simulate", json=payload)
         assert response.status_code == 422
 
-    def test_infinite_service_rate_is_rejected(self) -> None:
-        """float('inf') satisfies gt=0, so the upper bound is what stops it."""
+    def test_service_rate_above_the_ceiling_is_rejected(self) -> None:
+        """Named for what it actually sends: a large finite value, not infinity."""
         payload = design(1_000.0)
         payload["nodes"][1]["config"] = {"service_rate_rps": 1e12}
         assert client.post("/simulate", json=payload).status_code == 422
+
+    @pytest.mark.parametrize("token", ["Infinity", "-Infinity", "NaN"])
+    def test_non_finite_literal_is_a_clean_422(self, token: str) -> None:
+        """Rejected without crashing the error handler on the way out.
+
+        These are not valid JSON, but Python's parser accepts the bare tokens, so
+        they genuinely arrive over the wire. FastAPI's default handler echoes the
+        rejected input back, and json.dumps cannot encode inf or nan -- so before
+        the custom handler in main.py this path raised inside the error handler
+        and surfaced as an unhandled 500. Sent as raw content because json= would
+        refuse to encode it.
+        """
+        body = (
+            '{"nodes":[{"id":"lb","type":"load_balancer"},'
+            '{"id":"api","type":"app_server","config":{"service_rate_rps":TOKEN}}],'
+            '"edges":[{"source":"lb","target":"api"}],'
+            '"traffic":{"requests_per_second":1000}}'
+        ).replace("TOKEN", token)
+        response = client.post(
+            "/simulate", content=body, headers={"Content-Type": "application/json"}
+        )
+        assert response.status_code == 422
+        assert "detail" in response.json()
+
+    def test_ordinary_validation_errors_keep_their_shape(self) -> None:
+        """The custom handler must not change the contract for normal failures."""
+        response = client.post("/simulate", json=design(-1.0))
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail[0]["type"] == "greater_than"
+        assert detail[0]["loc"] == ["body", "traffic", "requests_per_second"]
+
+    def test_oversized_design_is_rejected(self) -> None:
+        """An unbounded node list is an easy way to make one request expensive."""
+        payload = design(1_000.0)
+        payload["nodes"] = [
+            {"id": f"n{i}", "type": "app_server"} for i in range(MAX_NODES + 1)
+        ]
+        payload["edges"] = []
+        assert client.post("/simulate", json=payload).status_code == 422
+
+    def test_engine_value_error_is_a_422_not_a_500(self) -> None:
+        """Engine-layer guards raise ValueError; that is bad input, not a fault."""
+        import app.main as main_module
+
+        original = main_module.simulate
+        main_module.simulate = _raise_value_error
+        try:
+            response = TestClient(
+                main_module.app, raise_server_exceptions=False
+            ).post("/simulate", json=design(1_000.0))
+        finally:
+            main_module.simulate = original
+        assert response.status_code == 422
 
     def test_unknown_component_type_is_rejected(self) -> None:
         payload = design(1_000.0)

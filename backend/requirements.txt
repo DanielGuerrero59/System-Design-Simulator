@@ -1,13 +1,22 @@
-# Loose lower bounds for now; we'll pin exact versions with `pip freeze`
-# once the app runs, so a stranger cloning this gets a reproducible install.
-fastapi>=0.115
-uvicorn[standard]>=0.32
-pydantic>=2.9
+# Pinned to the exact versions this project is developed and tested against, so
+# a fresh clone gets an identical environment.
+#
+# These are load-bearing, not cosmetic: app/main.py uses
+# status.HTTP_422_UNPROCESSABLE_CONTENT, which older Starlette releases do not
+# define. Under a loose `fastapi>=0.115` bound a resolver could install a
+# version without it, and the server would fail at import rather than at a
+# point that makes the cause obvious. starlette is pinned explicitly for the
+# same reason, even though FastAPI would otherwise pull it in transitively.
 
-# NumPy is intentionally absent: the M/M/1 math is scalar arithmetic and
-# imports nothing from it. Add it back when traffic-ramp presets need
-# vectorised timesteps, rather than shipping 34 MB unused.
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+
+# NumPy is intentionally absent: the M/M/1 math is scalar arithmetic and imports
+# nothing from it. Add it back when traffic-ramp presets need vectorised
+# timesteps, rather than shipping 34 MB unused.
 
 # Dev / test
-pytest>=8.0
-httpx>=0.27
+pytest==9.1.1
+httpx==0.28.1
