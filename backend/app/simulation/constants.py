@@ -35,6 +35,7 @@ class NodeStatus(str, Enum):
 
     HEALTHY = "healthy"
     WARNING = "warning"
+    CRITICAL = "critical"
     SATURATED = "saturated"
 
 
@@ -110,3 +111,10 @@ MAX_TRAFFIC_RPS = 10_000_000.0
 # gt=0, and an infinitely fast component would contribute exactly zero
 # latency and could never be flagged as the bottleneck.
 MAX_SERVICE_RATE_RPS = 10_000_000.0
+
+
+# --- Unit conversion -------------------------------------------------------
+
+# The queueing formulas work in seconds; the API reports milliseconds, because
+# the interesting latencies in a healthy system are fractions of a second.
+MILLISECONDS_PER_SECOND = 1000.0
