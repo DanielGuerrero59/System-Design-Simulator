@@ -20,7 +20,7 @@ plainly because they determine every number the app reports:
 from __future__ import annotations
 
 import math
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 
 from .components import ComponentAnalysis, ComponentSpec, build_component
@@ -57,9 +57,10 @@ def _build_graph(
     """Return (successors, predecessors) adjacency maps, validating as we go."""
     known = {spec.node_id for spec in specs}
     if len(known) != len(specs):
-        duplicates = sorted(
-            {spec.node_id for spec in specs if [s.node_id for s in specs].count(spec.node_id) > 1}
-        )
+        # One pass. The nested-count form is quadratic and runs on precisely the
+        # request a user is about to retry after fixing their diagram.
+        counts = Counter(spec.node_id for spec in specs)
+        duplicates = sorted(node_id for node_id, n in counts.items() if n > 1)
         raise SimulationError(f"duplicate node ids: {duplicates}")
 
     successors: dict[str, list[str]] = {spec.node_id: [] for spec in specs}
@@ -82,8 +83,13 @@ def _build_graph(
 
 def _topological_order(
     node_ids: list[str], successors: dict[str, list[str]], predecessors: dict[str, list[str]]
-) -> list[str]:
-    """Kahn's algorithm. Raises if the design has no single entry point or a cycle."""
+) -> tuple[list[str], str]:
+    """Kahn's algorithm. Raises if the design has no single entry point or a cycle.
+
+    Returns the traversal order *and* the entry point. Handing back the entry
+    explicitly keeps callers from having to assume it lands at order[0] -- true
+    today, but only as a side effect of how the queue below is seeded.
+    """
     entry_points = [node_id for node_id in node_ids if not predecessors[node_id]]
 
     if not entry_points:
@@ -121,7 +127,7 @@ def _topological_order(
             "Requests must flow forward through the system."
         )
 
-    return order
+    return order, entry_points[0]
 
 
 def _critical_path_seconds(
@@ -138,8 +144,13 @@ def _critical_path_seconds(
 
     for node_id in order:
         own_latency = analyses[node_id].latency_seconds
-        # Callers only reach this for a stable design, where no latency is None.
-        assert own_latency is not None
+        if own_latency is None:
+            # Only reachable if a caller skips the stability check. Raised rather
+            # than asserted because python -O strips asserts, and the failure
+            # without one is an opaque TypeError deep in this loop.
+            raise SimulationError(
+                f"cannot measure a path through saturated component {node_id!r}"
+            )
         slowest_upstream = max(
             (cumulative[p] for p in predecessors[node_id]), default=0.0
         )
@@ -164,11 +175,11 @@ def simulate(
 
     successors, predecessors = _build_graph(specs, edges)
     node_ids = [spec.node_id for spec in specs]
-    order = _topological_order(node_ids, successors, predecessors)
+    order, entry_node = _topological_order(node_ids, successors, predecessors)
 
     components = {spec.node_id: build_component(spec) for spec in specs}
     arrival_rates = dict.fromkeys(node_ids, 0.0)
-    arrival_rates[order[0]] = traffic_rps
+    arrival_rates[entry_node] = traffic_rps
 
     analyses: dict[str, ComponentAnalysis] = {}
     for node_id in order:

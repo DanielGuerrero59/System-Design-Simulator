@@ -107,6 +107,13 @@ MIN_REPLICAS = 1
 MAX_REPLICAS = 1_000
 MAX_TRAFFIC_RPS = 10_000_000.0
 
+# Ceilings on design size. Not a modelling limit -- a design with hundreds of
+# components stopped being a teaching aid long before this -- but a guard on a
+# public endpoint, where an unbounded node list is an easy way to make the
+# server do a great deal of work for one request.
+MAX_NODES = 200
+MAX_EDGES = 1_000
+
 # An upper bound matters as much as the lower one: float('inf') satisfies
 # gt=0, and an infinitely fast component would contribute exactly zero
 # latency and could never be flagged as the bottleneck.

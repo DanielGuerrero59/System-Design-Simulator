@@ -47,6 +47,12 @@ class TestSimpleChain:
         result = simulate([DB, API, LB], [("lb", "api"), ("api", "db")], 1_000.0)
         assert [node.node_id for node in result.nodes] == ["db", "api", "lb"]
 
+    def test_entry_receives_traffic_even_when_listed_last(self) -> None:
+        """Traffic must follow the graph's entry point, not the list's first item."""
+        result = simulate([DB, API, LB], CHAIN, 1_500.0)
+        assert by_id(result, "lb").arrival_rate_rps == pytest.approx(1_500.0)
+        assert by_id(result, "db").arrival_rate_rps == pytest.approx(1_500.0)
+
     def test_bottleneck_is_highest_utilisation_not_slowest_rate(self) -> None:
         result = simulate([LB, API, DB], CHAIN, 1_500.0)
         assert result.bottleneck_node_id == "api"

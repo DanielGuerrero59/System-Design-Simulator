@@ -12,9 +12,13 @@ testable) without FastAPI or Pydantic in the picture.
 
 from __future__ import annotations
 
+from collections import Counter
+
 from pydantic import BaseModel, Field, model_validator
 
 from .simulation.constants import (
+    MAX_EDGES,
+    MAX_NODES,
     MAX_REPLICAS,
     MAX_SERVICE_RATE_RPS,
     MAX_TRAFFIC_RPS,
@@ -103,8 +107,10 @@ class TrafficPattern(BaseModel):
 class SimulationRequest(BaseModel):
     """A complete design plus the load to run against it."""
 
-    nodes: list[Node] = Field(min_length=1)
-    edges: list[Edge] = Field(default_factory=list)
+    # Upper bounds are a guard on a public endpoint, not a modelling limit:
+    # without them one request can hand the server an arbitrary amount of work.
+    nodes: list[Node] = Field(min_length=1, max_length=MAX_NODES)
+    edges: list[Edge] = Field(default_factory=list, max_length=MAX_EDGES)
     traffic: TrafficPattern
 
     @model_validator(mode="after")
@@ -115,7 +121,9 @@ class SimulationRequest(BaseModel):
         traversal and belong with the engine, not in a schema validator.
         """
         ids = [node.id for node in self.nodes]
-        duplicates = {node_id for node_id in ids if ids.count(node_id) > 1}
+        # Counter is one pass; the obvious `ids.count(x) for x in ids` is
+        # quadratic and runs on exactly the request a confused user retries.
+        duplicates = {node_id for node_id, n in Counter(ids).items() if n > 1}
         if duplicates:
             raise ValueError(f"duplicate node ids: {sorted(duplicates)}")
 

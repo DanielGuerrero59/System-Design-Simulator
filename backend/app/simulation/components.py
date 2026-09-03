@@ -15,6 +15,7 @@ the engine stays testable without either dependency.
 
 from __future__ import annotations
 
+import math
 from abc import ABC
 from dataclasses import dataclass
 from typing import ClassVar
@@ -61,10 +62,15 @@ class ComponentSpec:
                 f"node {self.node_id!r}: replicas must be at least 1, "
                 f"got {self.replicas}"
             )
-        if self.service_rate_rps is not None and self.service_rate_rps <= 0:
+        # isfinite, not a bare `<= 0`: NaN compares False against every
+        # operator, so a plain comparison lets it straight through to be caught
+        # later by queueing.py, whose message cannot say which node was at fault.
+        if self.service_rate_rps is not None and (
+            not math.isfinite(self.service_rate_rps) or self.service_rate_rps <= 0
+        ):
             raise ValueError(
-                f"node {self.node_id!r}: service rate must be positive, "
-                f"got {self.service_rate_rps}"
+                f"node {self.node_id!r}: service rate must be a positive finite "
+                f"number, got {self.service_rate_rps}"
             )
         if self.hit_ratio is not None and not 0.0 <= self.hit_ratio <= 1.0:
             raise ValueError(
@@ -137,6 +143,14 @@ class Component(ABC):
         _REGISTRY[cls.component_type] = cls
 
     def __init__(self, spec: ComponentSpec) -> None:
+        # ABC alone does not block instantiation here, because this class
+        # declares no abstractmethod -- component_type is an annotation, which
+        # creates no attribute. Without this check, Component(spec) constructs
+        # happily and then fails much later with an opaque AttributeError.
+        if not hasattr(type(self), "component_type"):
+            raise TypeError(
+                f"{type(self).__name__} is abstract: it defines no component_type"
+            )
         self.spec = spec
 
     @property

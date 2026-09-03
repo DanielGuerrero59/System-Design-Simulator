@@ -152,8 +152,24 @@ class TestSpecValidation:
             ComponentSpec("n", ComponentType.APP_SERVER, replicas=0)
 
     def test_rejects_non_positive_service_rate(self) -> None:
-        with pytest.raises(ValueError, match="service rate must be positive"):
+        with pytest.raises(ValueError, match="service rate must be a positive finite number"):
             ComponentSpec("n", ComponentType.DATABASE, service_rate_rps=0.0)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_rejects_non_finite_service_rate(self, bad: float) -> None:
+        """NaN slips past a bare `<= 0`, so the spec must check finiteness itself.
+
+        Caught here rather than deeper in queueing.py, whose error cannot name
+        the offending node.
+        """
+        with pytest.raises(ValueError, match="must be a positive finite number"):
+            ComponentSpec("bad-node", ComponentType.DATABASE, service_rate_rps=bad)
+
+    def test_non_finite_error_names_the_node(self) -> None:
+        with pytest.raises(ValueError, match="bad-node"):
+            ComponentSpec(
+                "bad-node", ComponentType.DATABASE, service_rate_rps=float("nan")
+            )
 
     @pytest.mark.parametrize("bad", [-0.1, 1.1])
     def test_rejects_out_of_range_hit_ratio(self, bad: float) -> None:
@@ -174,6 +190,11 @@ class TestRegistry:
 
             class DuplicateCache(Component):
                 component_type = ComponentType.CACHE
+
+    def test_abstract_base_cannot_be_instantiated(self) -> None:
+        """ABC alone does not block this, since Component has no abstractmethod."""
+        with pytest.raises(TypeError, match="abstract"):
+            Component(ComponentSpec("x", ComponentType.DATABASE))
 
     def test_subclass_without_type_is_rejected(self) -> None:
         with pytest.raises(TypeError, match="must define a component_type"):
