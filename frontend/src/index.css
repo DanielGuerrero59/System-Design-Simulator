@@ -1,0 +1,34 @@
+/* Tailwind v4: one import replaces the v3 @tailwind base/components/utilities
+   trio. Theme customisation goes in a @theme block here rather than in a
+   JavaScript config file. */
+@import 'tailwindcss';
+
+/* React Flow ships its own stylesheet for node handles, edges and controls.
+   The canvas renders as an empty box without it. */
+@import '@xyflow/react/dist/style.css';
+
+@theme {
+  /* Component status colours, keyed to the backend's NodeStatus values so the
+     mapping from simulation result to UI colour is a lookup, not a conditional
+     scattered through components. */
+  --color-status-healthy: oklch(0.72 0.17 149);
+  --color-status-warning: oklch(0.79 0.16 86);
+  --color-status-critical: oklch(0.7 0.19 42);
+  --color-status-saturated: oklch(0.64 0.23 25);
+}
+
+@layer base {
+  /* The app commits to a light surface. Declaring color-scheme stops the
+     browser painting dark chrome (scrollbars, form controls) around it, and
+     gives the body an explicit background so the page does not inherit
+     whatever the host environment's default happens to be. */
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-slate-50);
+    color: var(--color-slate-800);
+  }
+}
