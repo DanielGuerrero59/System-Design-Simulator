@@ -105,3 +105,8 @@ UTILIZATION_SATURATED = 1.0
 MIN_REPLICAS = 1
 MAX_REPLICAS = 1_000
 MAX_TRAFFIC_RPS = 10_000_000.0
+
+# An upper bound matters as much as the lower one: float('inf') satisfies
+# gt=0, and an infinitely fast component would contribute exactly zero
+# latency and could never be flagged as the bottleneck.
+MAX_SERVICE_RATE_RPS = 10_000_000.0

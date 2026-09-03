@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .simulation.constants import (
     MAX_REPLICAS,
+    MAX_SERVICE_RATE_RPS,
     MAX_TRAFFIC_RPS,
     MIN_REPLICAS,
     ComponentType,
@@ -42,6 +43,7 @@ class NodeConfig(BaseModel):
     service_rate_rps: float | None = Field(
         default=None,
         gt=0,
+        le=MAX_SERVICE_RATE_RPS,
         description=(
             "Override for this component's per-instance service rate (mu). "
             "None means fall back to the type default in constants.py. This is "
