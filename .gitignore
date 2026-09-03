@@ -28,3 +28,7 @@ dist/
 # matching is case-sensitive on Linux/macOS even though Windows is not.
 CLAUDE.md
 Claude.md
+
+# A stray empty clone of this repo was created inside the project root.
+# Left ignored so `git add -A` does not abort on it; safe to delete outright.
+System-Design-Simulator/
