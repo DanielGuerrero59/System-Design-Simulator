@@ -61,9 +61,10 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. The canvas starts with a load balancer → app
-server → database design already drawn, so there is something to simulate
-immediately.
+Open <http://127.0.0.1:5173>. The frontend is a three-level game: each level
+sets a traffic target, a latency cap and a credit budget, and you have to build
+a design that meets all three. Level 01 starts with a database on the canvas —
+add an app server, wire it up, and press **Run traffic**.
 
 ### 3. Run the tests
 
@@ -118,12 +119,14 @@ backend/app/
 frontend/src/
   api/              types mirroring the Pydantic schemas; the only module that calls fetch
   design/           the diagram store — what the user drew, and nothing else
-  canvas/           React Flow wiring and the custom component node
-  sidebar/          palette, traffic controls, per-node inspector
-  simulation-results/  the result store, and the table that reports it
+  game/             levels, objectives, and the verdict; all the rules in one place
+  canvas/           React Flow wiring, the component card, the traffic source
+  sidebar/          the parts bin
+  panel/            objectives, the slowest-path figure, the coaching line
+  simulation-results/  the result store and the heat ramp
 ```
 
-Two boundaries are load-bearing:
+Three boundaries are load-bearing:
 
 **The engine does not know FastAPI exists.** `schemas.py` imports from the
 simulation package and never the reverse, so the queueing math is unit-testable
@@ -133,6 +136,14 @@ without a server anywhere in the picture.
 drew; the other holds a claim the backend made about a particular version of it.
 Keeping them apart is what lets the app say "these numbers describe an earlier
 version of your design" instead of quietly showing stale figures as current.
+
+**The game does not invent numbers.** Every figure on screen comes from
+`/simulate`. The game layer adds only what the backend has no opinion about:
+what a level asks for, what a component costs in credits, and whether the
+current design clears the bar. Utilisation, latency and saturation are read
+from the API response — including the "every node under 85%" objective, which
+tests each node's reported `status` rather than re-deriving the threshold on the
+client, where the copy would be free to disagree with the original.
 
 ---
 

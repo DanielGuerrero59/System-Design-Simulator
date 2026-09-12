@@ -1,0 +1,229 @@
+/* Nocturne tokens, expressed as a Tailwind v4 theme.
+ *
+ * The values below are transcribed from the Claude Design handoff's
+ * `styles.css`, which is the source of truth for the system's look. They live
+ * in `@theme` rather than in a plain `:root` block because Tailwind v4 does
+ * two things with a theme token: it emits the custom property (so
+ * `var(--color-surface)` resolves exactly as it does in the prototype) *and*
+ * it generates matching utilities (so `bg-surface` exists). One declaration,
+ * both spellings -- which is what keeps a class and a raw var from drifting
+ * apart into two different greys.
+ *
+ * Note which names Tailwind recognises as namespaces. `--radius-*`,
+ * `--shadow-*`, `--font-*` and `--color-*` generate utilities and deliberately
+ * override Tailwind's defaults. `--space-*` is *not* a Tailwind namespace
+ * (that is `--spacing-*`), so those tokens emit as plain variables without
+ * colliding with Tailwind's own spacing scale -- the design's 2.8px rhythm
+ * stays available to the components that were drawn against it, while `p-4`
+ * keeps meaning what every Tailwind reader expects.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+/* React Flow ships its own stylesheet for handles, edges and the viewport.
+   The canvas renders as an empty box without it. */
+@import '@xyflow/react/dist/style.css';
+
+@theme {
+  --color-bg: #161826;
+  --color-surface: #232532;
+  --color-text: #e9e9ed;
+  --color-accent: #9184d9;
+  --color-accent-2: #a7a1db;
+  --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+
+  --color-neutral-100: #f3f5fe;
+  --color-neutral-200: #e4e7f5;
+  --color-neutral-300: #cfd3e5;
+  --color-neutral-400: #b2b6ca;
+  --color-neutral-500: #9397ab;
+  --color-neutral-600: #75798c;
+  --color-neutral-700: #595d6c;
+  --color-neutral-800: #3f424d;
+  --color-neutral-900: #292b31;
+
+  --color-accent-100: #f5f4ff;
+  --color-accent-200: #e7e5fe;
+  --color-accent-300: #d2cefd;
+  --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0;
+  --color-accent-600: #796cbf;
+  --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a;
+  --color-accent-900: #2b2741;
+
+  /* The utilisation heat ramp, keyed to the backend's NodeStatus values so
+     colouring a node is a lookup rather than a chain of comparisons scattered
+     through the components. The thresholds these correspond to live in
+     `backend/app/simulation/constants.py`: warning at rho 0.70, critical at
+     0.85, saturated at 1.0. */
+  --color-status-healthy: #b5abfc;
+  --color-status-warning: oklch(0.78 0.15 80);
+  --color-status-critical: oklch(0.7 0.17 48);
+  --color-status-saturated: oklch(0.62 0.2 22);
+
+  --font-heading: 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+
+  --space-1: 2.8px;
+  --space-2: 5.6px;
+  --space-3: 8.4px;
+  --space-4: 11.2px;
+  --space-6: 16.8px;
+  --space-8: 22.4px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 0 0 1px #3f424d;
+  --shadow-md:
+    0 0 0 1px #595d6c, 0 6px 18px rgb(0 0 0 / 0.55);
+  --shadow-lg:
+    0 0 0 1px #9397ab, 0 16px 40px rgb(0 0 0 / 0.65);
+}
+
+@layer base {
+  /* Nocturne is a dark system. Declaring color-scheme stops the browser
+     painting light chrome -- scrollbars, form controls -- around a dark page. */
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-heading);
+    font-weight: 500;
+    line-height: 1.12;
+    letter-spacing: -0.015em;
+    margin: 0 0 var(--space-2);
+  }
+
+  h4 {
+    font-size: 20px;
+  }
+
+  /* The whole app is a direct-manipulation canvas, so a drag that selects
+     label text instead of moving a node is always a misfire. */
+  body {
+    user-select: none;
+  }
+}
+
+/* Shake a node that is past the danger threshold. Two steps rather than a
+   smooth ease: a component in trouble should read as juddering, not gliding. */
+@keyframes nx-pulse {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-1.5px, 1px);
+  }
+  75% {
+    transform: translate(1.5px, -1px);
+  }
+}
+
+/* Marching ants along a wire. The dash offset matches the 6 6 dasharray the
+   edges are drawn with, so the cycle repeats seamlessly. */
+@keyframes nx-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@keyframes nx-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The traffic dial. Range inputs cannot be styled through Tailwind utilities
+   -- the track and thumb are shadow-DOM pseudo-elements -- so they are written
+   out here against the same tokens. */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-neutral-800);
+  outline: none;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 0;
+  cursor: grab;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 0;
+  cursor: grab;
+}
+
+/* React Flow paints its own surfaces. Hand it the Nocturne ground so the
+   canvas does not sit on the library's default white. */
+.react-flow__background {
+  background: var(--color-bg);
+}
+
+.react-flow__handle {
+  border: 2px solid var(--color-bg);
+  width: 14px;
+  height: 14px;
+}
+
+.react-flow__attribution {
+  background: transparent;
+  color: var(--color-neutral-700);
+}
+
+/* The zoom controls ship with a light-theme skin -- white buttons with dark
+   glyphs -- which reads as three bright chips floating on the dark canvas.
+   Restyled here rather than through utilities because the glyphs are inline
+   SVG the library injects, and `fill` on them is not reachable from a class on
+   the wrapper. */
+.react-flow__controls-button {
+  background: var(--color-surface);
+  border: none;
+  border-bottom: 1px solid var(--color-neutral-800);
+  fill: var(--color-neutral-400);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--color-neutral-800);
+  fill: var(--color-text);
+}
+
+.react-flow__controls {
+  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
