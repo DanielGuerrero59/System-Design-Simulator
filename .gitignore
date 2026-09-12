@@ -24,10 +24,13 @@ dist/
 # so ignoring it here does not hide it from tooling on this machine.
 # Caveat: it will NOT travel with a fresh clone. Keep a backup if this repo
 # ever becomes the only copy.
-# Both spellings listed because the file has been known by each, and ignore
-# matching is case-sensitive on Linux/macOS even though Windows is not.
-CLAUDE.md
-Claude.md
+# Globbed rather than named exactly: the previous rules listed CLAUDE.md and
+# Claude.md, so committing the file as CLAUDE.local.md matched neither and it
+# shipped to a public repo. Ignore matching is case-sensitive on Linux/macOS
+# even though Windows is not, so each casing needs its own line.
+CLAUDE*.md
+Claude*.md
+claude*.md
 
 # A stray empty clone of this repo was created inside the project root.
 # Left ignored so `git add -A` does not abort on it; safe to delete outright.
