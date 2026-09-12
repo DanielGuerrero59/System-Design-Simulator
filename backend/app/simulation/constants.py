@@ -83,7 +83,7 @@ DEFAULT_CACHE_HIT_RATIO = 0.80
 
 # --- Status thresholds -----------------------------------------------------
 
-# Utilisation (rho) at which we start warning. At rho = 0.7 a request already
+# Utilisation (rho) at which we start warning. At rho = 0.7 a request  already
 # spends ~3.3x its idle service time at the node, which is where queueing
 # delay stops being noise and starts being felt.
 UTILIZATION_WARNING_THRESHOLD = 0.70
