@@ -77,6 +77,21 @@ hand-derived from the formulas rather than recorded from the implementation's
 own output — a test built from the code's output can only prove the code has not
 changed, not that it was right to begin with.
 
+```bash
+cd frontend && npm test
+```
+
+65 tests on the pure layers: the game's win conditions, the graph questions the
+UI answers without asking the backend, request building, node placement and
+number formatting. No DOM, so they run in about a second.
+
+The same discipline applies. `game/levels.test.ts` writes out the M/M/1
+formulas rather than importing them, so each level is checked against the model
+instead of against another copy of the app's own arithmetic — and it asserts
+both that the documented solution clears and that the naive design fails. A
+suite that only tries the intended answer can pass while the game asks for
+nothing at all, which is precisely the bug these were written after.
+
 ---
 
 ## Environment variables

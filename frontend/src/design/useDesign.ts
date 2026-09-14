@@ -28,27 +28,9 @@ import type { ComponentType } from '../api/types'
 import { levelAt } from '../game/levels'
 import { COMPONENT_CATALOG } from './catalog'
 import { buildAdjacency, canReach, dedupeEdges } from './graph'
+import { LANE_X, nextPositionInLane } from './layout'
 import { MAX_EDGES, MAX_NODES, MAX_REPLICAS, MIN_REPLICAS } from './limits'
 import type { DesignEdge, DesignNode, DesignNodeData } from './types'
-
-/**
- * Where each component type lands on the canvas.
- *
- * Laid out left to right in the order traffic meets them, so a correct design
- * reads as a flow rather than as a heap the player has to untangle before they
- * can think about queueing. Caches and queues share a lane because they occupy
- * the same position in the path -- in front of the tier behind them.
- */
-const LANE_X: Record<ComponentType, number> = {
-  load_balancer: 0,
-  app_server: 260,
-  cache: 520,
-  message_queue: 520,
-  database: 780,
-}
-
-const LANE_ORIGIN_Y = 60
-const LANE_PITCH_Y = 150
 
 /** Edges carry an arrowhead because direction is the point: this is a request
     path, not an association. */
@@ -67,38 +49,6 @@ function createNodeData(componentType: ComponentType): DesignNodeData {
     serviceRateRps: null,
     hitRatio: null,
   }
-}
-
-/**
- * Put a new node in the first free slot of its lane.
- *
- * Counting the lane's occupants is the obvious version and it is wrong: delete
- * the middle of three databases and the count drops to two, so the next one is
- * placed at slot two -- directly on top of a card that is already there. What
- * matters is which slots are taken, not how many.
- *
- * Only slots this function itself would have chosen are considered occupied. A
- * node the player has dragged somewhere arbitrary is not on the grid any more,
- * so it cannot meaningfully reserve a slot, and treating its stray position as
- * one would push new parts into empty space for no visible reason.
- */
-function nextPositionInLane(
-  existing: readonly DesignNode[],
-  componentType: ComponentType,
-): XYPosition {
-  const x = LANE_X[componentType]
-  const taken = new Set(
-    existing
-      .filter((node) => node.position.x === x)
-      .map((node) => (node.position.y - LANE_ORIGIN_Y) / LANE_PITCH_Y)
-      .filter((slot) => Number.isInteger(slot) && slot >= 0),
-  )
-
-  let slot = 0
-  while (taken.has(slot)) {
-    slot += 1
-  }
-  return { x, y: LANE_ORIGIN_Y + slot * LANE_PITCH_Y }
 }
 
 function createNode(
@@ -141,7 +91,7 @@ function seedNodes(
       createNode(
         mintIdFrom(counters, componentType),
         componentType,
-        nextPositionInLane(seeded, componentType),
+        nextPositionInLane(seeded, LANE_X[componentType]),
       ),
     )
   }
@@ -242,7 +192,7 @@ export function useDesign(initialLevelIndex: number): DesignStore {
               createNode(
                 mintId(componentType),
                 componentType,
-                nextPositionInLane(current, componentType),
+                nextPositionInLane(current, LANE_X[componentType]),
               ),
             ],
       )
