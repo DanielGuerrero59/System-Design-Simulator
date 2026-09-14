@@ -95,8 +95,9 @@ export const ComponentNode = memo(function ComponentNode({
             type="button"
             aria-label={`Remove ${data.label}`}
             onClick={() => callbacks.onRemove(id)}
-            className="grid size-[18px] place-items-center rounded-sm text-neutral-500
-                       transition-colors hover:bg-neutral-800 hover:text-text"
+            className="nodrag grid size-[18px] place-items-center rounded-sm
+                       text-neutral-500 transition-colors hover:bg-neutral-800
+                       hover:text-text"
           >
             <X size={12} />
           </button>
@@ -171,7 +172,7 @@ function Stepper({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid size-[18px] place-items-center rounded-sm border border-neutral-800
+      className="nodrag grid size-[18px] place-items-center rounded-sm border border-neutral-800
                  text-text transition-colors hover:border-accent-600 hover:bg-accent-900
                  disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-800
                  disabled:hover:bg-transparent"

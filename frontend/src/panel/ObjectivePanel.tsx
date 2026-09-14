@@ -18,7 +18,7 @@ import {
 
 import type { Assessment } from '../game/objectives'
 import type { Level } from '../game/levels'
-import { formatLatency } from '../format'
+import { formatLatencyFigure } from '../format'
 
 export interface ObjectivePanelProps {
   level: Level
@@ -97,7 +97,11 @@ export function ObjectivePanel({
             className="font-heading text-[34px] leading-[1.05] tabular-nums"
             style={{ color: latencyTint }}
           >
-            {!isLive ? '—' : totalLatencyMs === null ? '∞' : formatLatency(totalLatencyMs).replace(' ms', '')}
+            {!isLive
+              ? '—'
+              : totalLatencyMs === null
+                ? '∞' // infinity sign
+                : formatLatencyFigure(totalLatencyMs)}
           </span>
           <span className="text-xs text-neutral-500">ms</span>
         </div>
@@ -110,7 +114,11 @@ export function ObjectivePanel({
                     ? '≥ 1'
                     : bottleneck.utilization.toFixed(2)
                 }`
-              : 'Nothing on the canvas yet.'}
+              : // Reached when the result names a component the player has just
+                // deleted, so the label cannot be resolved. The old copy here
+                // said "Nothing on the canvas yet." over a canvas full of
+                // components; this says what is actually true for one frame.
+                'Waiting on the next run.'}
         </div>
       </div>
 

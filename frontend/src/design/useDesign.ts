@@ -3,14 +3,14 @@
  *
  * Simulation results are deliberately absent -- they live in
  * `simulation-results/useSimulation.ts` and are joined to nodes at render time.
- * The link between the two is `revision`, a counter this hook bumps whenever
- * the design changes in a way that would change the numbers. That is what lets
- * a result identify itself as describing a design the player has already moved
- * past, instead of sitting on screen looking current.
+ * Staleness is decided there, by comparing the request a stored answer came
+ * from against the request this design would send now.
  *
- * Moving a node does not bump it. Position is pure presentation -- the request
- * body does not even carry it -- so nudging a box two pixels should not
- * invalidate a perfectly good answer.
+ * That comparison is why this store keeps no revision counter of its own. The
+ * request body carries neither positions nor labels, so two designs that differ
+ * only cosmetically serialise identically and a perfectly good answer survives
+ * a node being dragged -- which is exactly the rule a hand-maintained counter
+ * was there to approximate, without the risk of the two disagreeing.
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react'
@@ -70,18 +70,35 @@ function createNodeData(componentType: ComponentType): DesignNodeData {
 }
 
 /**
- * Stack a new node under whatever already occupies its lane, so parts never
- * land on top of each other however many the player adds.
+ * Put a new node in the first free slot of its lane.
+ *
+ * Counting the lane's occupants is the obvious version and it is wrong: delete
+ * the middle of three databases and the count drops to two, so the next one is
+ * placed at slot two -- directly on top of a card that is already there. What
+ * matters is which slots are taken, not how many.
+ *
+ * Only slots this function itself would have chosen are considered occupied. A
+ * node the player has dragged somewhere arbitrary is not on the grid any more,
+ * so it cannot meaningfully reserve a slot, and treating its stray position as
+ * one would push new parts into empty space for no visible reason.
  */
 function nextPositionInLane(
   existing: readonly DesignNode[],
   componentType: ComponentType,
 ): XYPosition {
   const x = LANE_X[componentType]
-  const occupants = existing.filter(
-    (node) => LANE_X[node.data.componentType] === x,
-  ).length
-  return { x, y: LANE_ORIGIN_Y + occupants * LANE_PITCH_Y }
+  const taken = new Set(
+    existing
+      .filter((node) => node.position.x === x)
+      .map((node) => (node.position.y - LANE_ORIGIN_Y) / LANE_PITCH_Y)
+      .filter((slot) => Number.isInteger(slot) && slot >= 0),
+  )
+
+  let slot = 0
+  while (taken.has(slot)) {
+    slot += 1
+  }
+  return { x, y: LANE_ORIGIN_Y + slot * LANE_PITCH_Y }
 }
 
 function createNode(
@@ -89,7 +106,12 @@ function createNode(
   componentType: ComponentType,
   position: XYPosition,
 ): DesignNode {
-  return { id, type: 'component', position, data: createNodeData(componentType) }
+  return {
+    id,
+    type: 'component',
+    position,
+    data: createNodeData(componentType),
+  }
 }
 
 /**
@@ -126,24 +148,9 @@ function seedNodes(
   return seeded
 }
 
-/** Changes React Flow reports that leave the simulation answer untouched. */
-function isCosmeticNodeChange(change: NodeChange<DesignNode>): boolean {
-  return (
-    change.type === 'position' ||
-    change.type === 'dimensions' ||
-    change.type === 'select'
-  )
-}
-
-function isCosmeticEdgeChange(change: EdgeChange<DesignEdge>): boolean {
-  return change.type === 'select'
-}
-
 export interface DesignStore {
   nodes: DesignNode[]
   edges: DesignEdge[]
-  /** Bumped on every change that could change the simulation answer. */
-  revision: number
   onNodesChange: (changes: NodeChange<DesignNode>[]) => void
   onEdgesChange: (changes: EdgeChange<DesignEdge>[]) => void
   onConnect: (connection: Connection) => void
@@ -181,37 +188,18 @@ export function useDesign(initialLevelIndex: number): DesignStore {
     initial.nodes,
   )
   const [edges, setEdges, applyEdgeChanges] = useEdgesState<DesignEdge>([])
-  const [revision, setRevision] = useState(0)
-
-  const bumpRevision = useCallback(() => {
-    setRevision((current) => current + 1)
-  }, [])
-
-  const onNodesChange = useCallback(
-    (changes: NodeChange<DesignNode>[]) => {
-      applyNodeChanges(changes)
-      if (!changes.every(isCosmeticNodeChange)) {
-        bumpRevision()
-      }
-    },
-    [applyNodeChanges, bumpRevision],
-  )
-
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<DesignEdge>[]) => {
-      applyEdgeChanges(changes)
-      if (!changes.every(isCosmeticEdgeChange)) {
-        bumpRevision()
-      }
-    },
-    [applyEdgeChanges, bumpRevision],
-  )
+  const onNodesChange = applyNodeChanges
+  const onEdgesChange = applyEdgeChanges
 
   // Derived once per graph change rather than per connection attempt: React
   // Flow asks isValidConnection on every pointer move while an edge is being
   // dragged around.
   const adjacency = useMemo(
-    () => buildAdjacency(nodes.map((node) => node.id), dedupeEdges(edges)),
+    () =>
+      buildAdjacency(
+        nodes.map((node) => node.id),
+        dedupeEdges(edges),
+      ),
     [nodes, edges],
   )
 
@@ -238,9 +226,8 @@ export function useDesign(initialLevelIndex: number): DesignStore {
           ? current
           : addEdge({ ...connection, ...EDGE_DEFAULTS }, current),
       )
-      bumpRevision()
     },
-    [bumpRevision, isValidConnection, setEdges],
+    [isValidConnection, setEdges],
   )
 
   const atNodeLimit = nodes.length >= MAX_NODES
@@ -259,9 +246,8 @@ export function useDesign(initialLevelIndex: number): DesignStore {
               ),
             ],
       )
-      bumpRevision()
     },
-    [bumpRevision, mintId, setNodes],
+    [mintId, setNodes],
   )
 
   const removeNode = useCallback(
@@ -274,9 +260,8 @@ export function useDesign(initialLevelIndex: number): DesignStore {
           (edge) => edge.source !== nodeId && edge.target !== nodeId,
         ),
       )
-      bumpRevision()
     },
-    [bumpRevision, setEdges, setNodes],
+    [setEdges, setNodes],
   )
 
   const setReplicas = useCallback(
@@ -289,24 +274,21 @@ export function useDesign(initialLevelIndex: number): DesignStore {
             : node,
         ),
       )
-      bumpRevision()
     },
-    [bumpRevision, setNodes],
+    [setNodes],
   )
 
   const loadLevel = useCallback(
     (levelIndex: number) => {
       setNodes(seedNodes(levelIndex, idCountersRef.current))
       setEdges([])
-      bumpRevision()
     },
-    [bumpRevision, setEdges, setNodes],
+    [setEdges, setNodes],
   )
 
   return {
     nodes,
     edges,
-    revision,
     onNodesChange,
     onEdgesChange,
     onConnect,

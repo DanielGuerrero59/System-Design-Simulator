@@ -16,9 +16,10 @@
  *
  *   02  app x6 -> cache -> db.  App rho 0.75 (W 2.00 ms), cache rho 0.09,
  *       DB sees 9,000 x (1 - 0.8) = 1,800, rho 0.36 (W 0.31 ms).
- *       Path 2.32 ms, 19 credits. Scaling the database instead of caching
- *       needs three replicas and lands at 24 credits -- over budget. The
- *       squeeze is what makes the cache the answer rather than an option.
+ *       Path 2.32 ms, 19 credits. Keeping the same six app servers and
+ *       scaling the database instead needs db x3, which totals 24 credits
+ *       (6 x 2 + 3 x 4) against a budget of 22. That squeeze is what makes
+ *       the cache the answer rather than an option.
  *
  *   03  app x18 -> cache -> db x2.  App rho 0.83 (W 3.00 ms), cache rho 0.30,
  *       DB sees 6,000 over two replicas, rho 0.60 (W 0.50 ms).

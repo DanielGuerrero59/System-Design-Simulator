@@ -85,14 +85,50 @@ export function canReach(
 }
 
 /**
+ * Every node reachable from `from` by following at least one edge.
+ *
+ * Distinct from `canReach(adjacency, x, x)`, which is true by definition: a
+ * node trivially reaches itself without any edges existing. The question here
+ * is what traffic *arrives at* after leaving `from`, which is what makes a
+ * design a system rather than a single box.
+ */
+export function reachableFrom(adjacency: Adjacency, from: string): Set<string> {
+  const reached = new Set<string>()
+  const queue: string[] = [from]
+
+  while (queue.length > 0) {
+    const current = queue.pop() as string
+    for (const next of adjacency.get(current) ?? []) {
+      if (!reached.has(next)) {
+        reached.add(next)
+        queue.push(next)
+      }
+    }
+  }
+
+  return reached
+}
+
+/**
  * Nodes with no incoming edge. The engine requires exactly one: traffic enters
  * the system at a single point.
+ *
+ * An edge is only counted when both of its endpoints still exist, matching
+ * `buildAdjacency` and the engine's own `_build_graph`. Without that guard a
+ * dangling edge left over for a frame by a delete would make its target look
+ * like it still has a predecessor, and this function would disagree with the
+ * other two about whether the graph has an entry point at all.
  */
 export function findEntryPoints(
   nodeIds: readonly string[],
   edges: readonly EdgeLike[],
 ): string[] {
-  const hasIncoming = new Set(edges.map((edge) => edge.target))
+  const known = new Set(nodeIds)
+  const hasIncoming = new Set(
+    edges
+      .filter((edge) => known.has(edge.source) && known.has(edge.target))
+      .map((edge) => edge.target),
+  )
   return nodeIds.filter((id) => !hasIncoming.has(id))
 }
 
@@ -105,9 +141,14 @@ export function findUnreachableFromEntries(
   edges: readonly EdgeLike[],
 ): string[] {
   const adjacency = buildAdjacency(nodeIds, edges)
+  const known = new Set(nodeIds)
   const indegree = new Map<string, number>(nodeIds.map((id) => [id, 0]))
   for (const edge of edges) {
-    if (indegree.has(edge.target)) {
+    // Both endpoints, for the same reason buildAdjacency skips unknown sources:
+    // counting an edge here that the adjacency map dropped would leave a node's
+    // in-degree permanently above zero, and Kahn's algorithm would report a
+    // perfectly acyclic design as a cycle.
+    if (known.has(edge.source) && known.has(edge.target)) {
       indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1)
     }
   }

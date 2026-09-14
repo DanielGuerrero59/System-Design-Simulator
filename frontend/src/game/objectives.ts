@@ -17,8 +17,14 @@
 
 import type { NodeResult, SimulationResponse } from '../api/types'
 import { COMPONENT_CATALOG } from '../design/catalog'
-import type { DesignNode } from '../design/types'
-import { formatRate } from '../format'
+import {
+  buildAdjacency,
+  dedupeEdges,
+  findEntryPoints,
+  reachableFrom,
+} from '../design/graph'
+import type { DesignEdge, DesignNode } from '../design/types'
+import { formatLatencyFigure, formatRate } from '../format'
 import type { Level } from './levels'
 
 export type VerdictTone = 'cleared' | 'failing' | 'idle'
@@ -41,9 +47,39 @@ export interface Assessment {
   bottleneck: NodeResult | null
 }
 
+/**
+ * Does traffic actually flow *through* something to reach storage?
+ *
+ * The test is a path of at least one edge from the entry point to a database --
+ * not merely "a database is present". That distinction is the whole game. With
+ * the weaker check, every level cleared by pressing Run on its seeded database
+ * and adding replicas: no app server, no cache, not a single wire, and the
+ * panel said "It holds. Level cleared." A level has to ask for a system, and a
+ * lone box with traffic pointed at it is not one.
+ */
+function deliversToDatabase(
+  nodes: readonly DesignNode[],
+  edges: readonly DesignEdge[],
+): boolean {
+  const nodeIds = nodes.map((node) => node.id)
+  const uniqueEdges = dedupeEdges(edges)
+  const entries = findEntryPoints(nodeIds, uniqueEdges)
+  if (entries.length !== 1) {
+    return false
+  }
+  const downstream = reachableFrom(
+    buildAdjacency(nodeIds, uniqueEdges),
+    entries[0] as string,
+  )
+  return nodes.some(
+    (node) => node.data.componentType === 'database' && downstream.has(node.id),
+  )
+}
+
 export interface AssessmentInput {
   level: Level
   nodes: readonly DesignNode[]
+  edges: readonly DesignEdge[]
   /** Null until a run has produced numbers for the current design. */
   result: SimulationResponse | null
   trafficRps: number
@@ -72,23 +108,27 @@ function labelFor(nodes: readonly DesignNode[], nodeId: string | null): string {
 }
 
 export function assess(input: AssessmentInput): Assessment {
-  const { level, nodes, result, trafficRps, costCredits, designProblem, isRunning } =
-    input
+  const {
+    level,
+    nodes,
+    edges,
+    result,
+    trafficRps,
+    costCredits,
+    designProblem,
+    isRunning,
+  } = input
 
   const live = isRunning && result !== null
 
   const hitsTarget = trafficRps >= level.targetRps
   const isInBudget = costCredits <= level.budgetCredits
-  // Reaching a database is what makes a design a *system* rather than a wall of
-  // app servers answering from nowhere. The graph checks in validate.ts already
-  // guarantee every node is reachable from the single entry point, so the mere
-  // presence of a database is enough -- it cannot be stranded.
-  const reachesDatabase = nodes.some(
-    (node) => node.data.componentType === 'database',
-  )
+  const reachesDatabase = deliversToDatabase(nodes, edges)
 
   const allComfortable =
-    result !== null && result.nodes.length > 0 && result.nodes.every(isComfortable)
+    result !== null &&
+    result.nodes.length > 0 &&
+    result.nodes.every(isComfortable)
 
   const isFastEnough =
     result !== null &&
@@ -110,25 +150,31 @@ export function assess(input: AssessmentInput): Assessment {
     allComfortable &&
     isFastEnough
 
+  // Floored, not rounded. At rho 0.8462 a rounded figure reads "85%" beside a
+  // green check on a row that says "under 85%" -- the display contradicting the
+  // verdict next to it. Flooring keeps the printed integer below 85 for exactly
+  // the values the backend still calls comfortable.
   const busiestPercent =
     live && bottleneck
-      ? `${Math.round(Math.min(999, bottleneck.utilization * 100))}%`
+      ? `${Math.floor(Math.min(999, bottleneck.utilization * 100))}%`
       : IDLE
 
-  // Two decimals, matching the headline figure in the panel. Rounding to a
-  // whole number here made a 1.63 ms path read as "2" against a 4 ms cap --
-  // two different numbers for the same quantity, six inches apart on screen.
   const latencyValue = !live
     ? IDLE
     : result.total_latency_ms === null
       ? '∞' // infinity sign
-      : result.total_latency_ms.toFixed(2)
+      : formatLatencyFigure(result.total_latency_ms)
 
   const objectives: Objective[] = [
     {
       label: `Serve ${formatRate(level.targetRps)}`,
       value: formatRate(trafficRps),
       isMet: hitsTarget,
+    },
+    {
+      label: 'Traffic reaches the database',
+      value: reachesDatabase ? 'wired' : 'no path',
+      isMet: reachesDatabase,
     },
     {
       label: 'Every node under 85%',

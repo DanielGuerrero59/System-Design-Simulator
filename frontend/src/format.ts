@@ -18,15 +18,27 @@ export function formatLatency(milliseconds: number | null): string {
   if (milliseconds === null) {
     return '∞' // infinity sign
   }
+  return `${formatLatencyFigure(milliseconds)} ms`
+}
+
+/**
+ * The bare number, with no unit.
+ *
+ * Shared with the objective row, which prints the figure next to a cap that
+ * carries the unit already. Two independent formatters drifted here once: the
+ * panel headline showed a seeded Level 01 path as "0.385" while the objective
+ * beside it said "0.38" -- the same quantity, two answers, a few inches apart.
+ */
+export function formatLatencyFigure(milliseconds: number): string {
   // Sub-millisecond latencies are common and interesting here (a load balancer
   // at 0.025 ms), so small values need more decimals, not fewer.
   if (milliseconds < 1) {
-    return `${milliseconds.toFixed(3)} ms`
+    return milliseconds.toFixed(3)
   }
   if (milliseconds < 100) {
-    return `${milliseconds.toFixed(2)} ms`
+    return milliseconds.toFixed(2)
   }
-  return `${Math.round(milliseconds)} ms`
+  return `${Math.round(milliseconds)}`
 }
 
 /** Requests per second, with thousands separators and no spurious decimals. */

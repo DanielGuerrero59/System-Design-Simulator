@@ -2,23 +2,21 @@
  * The result store: what the backend last said, and whether it still applies.
  *
  * This hook holds no opinion about what the player drew -- it takes a request
- * body and a revision stamp, and reports back. Keeping it separate from the
- * design store is what makes "these numbers describe an earlier version of
- * your design" expressible at all.
+ * body and reports back. Keeping it separate from the design store is what
+ * makes "these numbers describe an earlier version of your design" expressible
+ * at all.
  *
  * While the traffic is running it re-simulates continuously, which is the
  * behaviour the arcade framing needs: drag the dial and the colours move. Two
- * mechanisms keep that from turning into a request storm or a race.
+ * mechanisms keep that from turning into a request storm or a lie.
  *
  *   Debounce. A burst of changes -- and dragging a slider is nothing but a
  *   burst of changes -- collapses into one request once the player pauses.
  *
- *   Supersession. Every in-flight request is aborted when a newer one starts,
- *   and each response is checked against the revision that is current when it
- *   lands. Without that second check a slow early response can arrive after a
- *   fast later one and overwrite good numbers with stale ones -- the classic
- *   out-of-order-response bug, which shows up here as colours that settle onto
- *   the wrong answer and stay there.
+ *   Keying. Every stored answer carries the exact request that produced it, and
+ *   is only published while that request is still the current one. That single
+ *   rule covers both an out-of-order response overwriting a newer answer, and a
+ *   previous answer being re-shown as live after the design has moved on.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -35,6 +33,13 @@ import type { SimulationRequest, SimulationResponse } from '../api/types'
  */
 const DEBOUNCE_MS = 150
 
+/** An answer, plus the exact request it is an answer to. */
+interface Outcome {
+  key: string
+  response: SimulationResponse | null
+  error: string | null
+}
+
 export interface SimulationStore {
   result: SimulationResponse | null
   error: string | null
@@ -46,26 +51,21 @@ export interface SimulationStore {
 export interface SimulationInput {
   /** Null when the design cannot be simulated -- the loop idles instead. */
   request: SimulationRequest | null
-  /** Bumped by the design store whenever the numbers would change. */
-  revision: number
 }
 
 export function useSimulation(input: SimulationInput): SimulationStore {
-  const { request, revision } = input
+  const { request } = input
 
-  const [result, setResult] = useState<SimulationResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<Outcome | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
-  // The revision the newest request was built from. A response is only allowed
-  // to land if this still matches what it was sent for.
-  const inFlightRevisionRef = useRef<number | null>(null)
 
   // Serialised rather than depended on directly: `request` is a fresh object
   // every render, so using it as a dependency would restart the debounce on
-  // every keystroke elsewhere in the app. The JSON is the thing that actually
-  // determines the answer.
+  // every unrelated re-render. The JSON is also exactly what determines the
+  // answer -- positions and labels are not in it -- which is what makes it a
+  // sound identity for the result as well as for the effect.
   const requestKey = request === null ? null : JSON.stringify(request)
 
   useEffect(() => {
@@ -77,16 +77,10 @@ export function useSimulation(input: SimulationInput): SimulationStore {
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
-      inFlightRevisionRef.current = revision
 
       simulate(JSON.parse(requestKey) as SimulationRequest, controller.signal)
         .then((response) => {
-          // Landed after the player moved on: discard rather than overwrite.
-          if (inFlightRevisionRef.current !== revision) {
-            return
-          }
-          setResult(response)
-          setError(null)
+          setOutcome({ key: requestKey, response, error: null })
         })
         .catch((cause: unknown) => {
           // An abort is this hook superseding itself, not a failure the player
@@ -94,24 +88,21 @@ export function useSimulation(input: SimulationInput): SimulationStore {
           if (cause instanceof DOMException && cause.name === 'AbortError') {
             return
           }
-          if (inFlightRevisionRef.current !== revision) {
-            return
-          }
-          setError(
-            cause instanceof SimulationApiError
-              ? cause.message
-              : 'The simulation failed for an unknown reason.',
-          )
-          // The previous result described a design that no longer applies, so
-          // it is cleared rather than left on screen looking authoritative.
-          setResult(null)
+          setOutcome({
+            key: requestKey,
+            response: null,
+            error:
+              cause instanceof SimulationApiError
+                ? cause.message
+                : 'The simulation failed for an unknown reason.',
+          })
         })
     }, DEBOUNCE_MS)
 
     return () => {
       clearTimeout(timer)
     }
-  }, [isRunning, requestKey, revision])
+  }, [isRunning, requestKey])
 
   // Abort whatever is in flight when the component goes away.
   useEffect(() => {
@@ -124,24 +115,23 @@ export function useSimulation(input: SimulationInput): SimulationStore {
     setIsRunning(running)
     if (!running) {
       abortRef.current?.abort()
-      setResult(null)
-      setError(null)
+      setOutcome(null)
     }
   }, [])
 
-  // Derived during render rather than cleared from an effect. The moment the
-  // design stops being simulatable, the last result describes a graph that no
-  // longer exists -- so it is withheld immediately, in the same commit that
-  // made it stale, instead of lingering for one frame while an effect catches
-  // up. The stored value survives underneath: rewiring the missing edge brings
-  // the numbers straight back without a round trip.
-  const applicableResult = requestKey === null ? null : result
+  // The one place staleness is decided, and it decides it for the error as much
+  // as for the numbers. A stored answer is published only while the request that
+  // produced it is still the request the design would send now -- so a late
+  // response for a superseded design is dropped on arrival rather than
+  // overwriting a newer one, and an error raised against a design the player has
+  // since changed stops being shown instead of pinning a red banner to the panel
+  // with nothing in flight that could ever clear it.
+  const isCurrent = outcome !== null && outcome.key === requestKey
 
   return {
-    result: applicableResult,
-    error,
+    result: isCurrent ? outcome.response : null,
+    error: isCurrent ? outcome.error : null,
     isRunning,
-
     setRunning,
   }
 }

@@ -52,7 +52,7 @@ export default function App() {
     [designProblem, design.nodes, design.edges, trafficRps],
   )
 
-  const simulation = useSimulation({ request, revision: design.revision })
+  const simulation = useSimulation({ request })
 
   const costCredits = useMemo(() => designCost(design.nodes), [design.nodes])
 
@@ -61,6 +61,7 @@ export default function App() {
       assess({
         level,
         nodes: design.nodes,
+        edges: design.edges,
         result: simulation.result,
         trafficRps,
         costCredits,
@@ -70,6 +71,7 @@ export default function App() {
     [
       level,
       design.nodes,
+      design.edges,
       simulation.result,
       simulation.isRunning,
       trafficRps,
@@ -152,9 +154,13 @@ export default function App() {
             <span className="text-[10px] tracking-[0.14em] whitespace-nowrap text-neutral-500 uppercase">
               Traffic <span className="text-[11px] normal-case">λ</span>
             </span>
+            {/* The floor is one step, not zero. `TrafficPattern.requests_per_second`
+                is `Field(gt=0)`, so the far-left stop of a zero-based dial sent a
+                rate the API rejects: a guaranteed 422 and a red banner reachable
+                by dragging, with nothing wrong with the player's design. */}
             <input
               type="range"
-              min={0}
+              min={level.stepRps}
               max={level.maxRps}
               step={level.stepRps}
               value={trafficRps}
