@@ -53,88 +53,97 @@ export const ComponentNode = memo(function ComponentNode({
 
   // Capped at 100% so a saturated component fills the bar rather than
   // overflowing it. The readout above still says rho >= 1, so nothing is lost.
-  const barPercent = outcome
-    ? Math.min(100, outcome.utilization * 100)
-    : 0
+  const barPercent = outcome ? Math.min(100, outcome.utilization * 100) : 0
 
   return (
-    <div
-      style={{
-        width: NODE_WIDTH,
-        background: 'var(--color-surface)',
-        borderRadius: 'var(--radius-md)',
-        border: `1px solid ${alarming || selected ? tint : 'var(--color-neutral-800)'}`,
-        boxShadow: alarming
-          ? `0 0 0 1px ${tint}, 0 0 22px -4px ${tint}`
-          : 'var(--shadow-md)',
-        animation: alarming
-          ? 'nx-pulse 0.28s infinite steps(2, end), nx-in 0.18s ease-out'
-          : 'nx-in 0.18s ease-out',
-      }}
-    >
+    // Two elements, one animation each, and that split is load-bearing.
+    //
+    // `animation` is a single property: changing the list restarts every
+    // animation in it. With the mount slide-in and the alarm shake sharing one
+    // element, each crossing of the danger threshold re-ran `nx-in` and the
+    // card visibly jumped. That is constant here in a way it would not be in a
+    // static mockup -- the traffic dial re-simulates as it moves, so dragging
+    // it past 85% flickers every node it touches.
+    //
+    // Held apart, the outer element's animation never changes after mount and
+    // the inner one is free to toggle.
+    <div style={{ width: NODE_WIDTH, animation: 'nx-in 0.18s ease-out' }}>
       <Handle
         type="target"
         position={Position.Left}
         style={{ background: 'var(--color-neutral-700)' }}
       />
-
-      <div className="grid grid-cols-[20px_1fr_auto] items-center gap-2 px-[9px] py-2">
-        <Icon size={16} color={tint} weight="regular" />
-        <span className="truncate font-heading text-[11px] font-medium">
-          {data.label}
-        </span>
-        <button
-          type="button"
-          aria-label={`Remove ${data.label}`}
-          onClick={() => callbacks.onRemove(id)}
-          className="grid size-[18px] place-items-center rounded-sm text-neutral-500
-                       transition-colors hover:bg-neutral-800 hover:text-text"
-        >
-          <X size={12} />
-        </button>
-      </div>
-
-      <div className="mx-[9px] h-[5px] overflow-hidden rounded-[3px] bg-neutral-900">
-        <div
-          className="h-full rounded-[3px]"
-          style={{
-            width: `${barPercent}%`,
-            background: tint,
-            transition: 'width 0.35s ease, background 0.35s ease',
-          }}
-        />
-      </div>
-
       <div
-        className="px-[9px] pt-1.5 text-[10.5px] tabular-nums whitespace-nowrap"
-        style={{ color: tint }}
+        style={{
+          background: 'var(--color-surface)',
+          borderRadius: 'var(--radius-md)',
+          border: `1px solid ${alarming || selected ? tint : 'var(--color-neutral-800)'}`,
+          boxShadow: alarming
+            ? `0 0 0 1px ${tint}, 0 0 22px -4px ${tint}`
+            : 'var(--shadow-md)',
+          animation: alarming
+            ? 'nx-pulse 0.28s infinite steps(2, end)'
+            : undefined,
+        }}
       >
-        {readout}
-      </div>
-
-      {definition.isScalable ? (
-        <div className="flex items-center justify-between gap-1 px-[9px] pt-[5px] pb-[7px]">
-          <Stepper
-            label={`Remove a replica from ${data.label}`}
-            disabled={data.replicas <= MIN_REPLICAS}
-            onClick={() => callbacks.onReplicasChange(id, data.replicas - 1)}
-          >
-            <Minus size={11} />
-          </Stepper>
-          <span className="text-[10.5px] text-neutral-400 tabular-nums">
-            ×{data.replicas}
+        <div className="grid grid-cols-[20px_1fr_auto] items-center gap-2 px-[9px] py-2">
+          <Icon size={16} color={tint} weight="regular" />
+          <span className="truncate font-heading text-[11px] font-medium">
+            {data.label}
           </span>
-          <Stepper
-            label={`Add a replica to ${data.label}`}
-            disabled={data.replicas >= MAX_REPLICAS}
-            onClick={() => callbacks.onReplicasChange(id, data.replicas + 1)}
+          <button
+            type="button"
+            aria-label={`Remove ${data.label}`}
+            onClick={() => callbacks.onRemove(id)}
+            className="grid size-[18px] place-items-center rounded-sm text-neutral-500
+                       transition-colors hover:bg-neutral-800 hover:text-text"
           >
-            <Plus size={11} />
-          </Stepper>
+            <X size={12} />
+          </button>
         </div>
-      ) : (
-        <div className="pb-[9px]" />
-      )}
+
+        <div className="mx-[9px] h-[5px] overflow-hidden rounded-[3px] bg-neutral-900">
+          <div
+            className="h-full rounded-[3px]"
+            style={{
+              width: `${barPercent}%`,
+              background: tint,
+              transition: 'width 0.35s ease, background 0.35s ease',
+            }}
+          />
+        </div>
+
+        <div
+          className="px-[9px] pt-1.5 text-[10.5px] tabular-nums whitespace-nowrap"
+          style={{ color: tint }}
+        >
+          {readout}
+        </div>
+
+        {definition.isScalable ? (
+          <div className="flex items-center justify-between gap-1 px-[9px] pt-[5px] pb-[7px]">
+            <Stepper
+              label={`Remove a replica from ${data.label}`}
+              disabled={data.replicas <= MIN_REPLICAS}
+              onClick={() => callbacks.onReplicasChange(id, data.replicas - 1)}
+            >
+              <Minus size={11} />
+            </Stepper>
+            <span className="text-[10.5px] text-neutral-400 tabular-nums">
+              ×{data.replicas}
+            </span>
+            <Stepper
+              label={`Add a replica to ${data.label}`}
+              disabled={data.replicas >= MAX_REPLICAS}
+              onClick={() => callbacks.onReplicasChange(id, data.replicas + 1)}
+            >
+              <Plus size={11} />
+            </Stepper>
+          </div>
+        ) : (
+          <div className="pb-[9px]" />
+        )}
+      </div>
 
       <Handle
         type="source"
