@@ -117,6 +117,53 @@ Get `ALLOWED_ORIGINS` wrong and everything keeps passing except the browser:
 `curl` works, the test suite works, and the only symptom is a CORS failure in
 the console. It is worth setting deliberately.
 
+## Deploy
+
+The backend runs anywhere that can build a Dockerfile; the frontend is a static
+Vite build. The intended pairing is **Railway** for the API and **Vercel** for
+the site, each deploying straight from this repository so that a push to `main`
+ships. Backend first — the frontend needs its URL.
+
+### 1. Backend on Railway
+
+1. **New Project → Deploy from GitHub repo**, and pick this repository.
+2. In the service's **Settings**, set **Root Directory** to `backend`. Railway
+   finds the `Dockerfile` there and builds it; the `railway.json` next to it
+   points the health check at `/health` and restarts the service on failure.
+3. **Settings → Networking → Generate Domain** (port `8000` if it asks). The
+   URL it gives you is `VITE_API_BASE_URL`.
+
+Check it: `https://<your-api>.up.railway.app/health` returns `{"status":"ok"}`.
+
+### 2. Frontend on Vercel
+
+1. **Add New → Project**, and import this repository.
+2. Set **Root Directory** to `frontend`. Vercel detects Vite and runs
+   `npm run build` into `dist/` on its own.
+3. Under **Environment Variables**, add `VITE_API_BASE_URL` with the Railway
+   URL from above, without a trailing slash. It is inlined at build time, so
+   setting it after the first deploy means redeploying.
+4. Deploy. The resulting `https://<your-site>.vercel.app` is `ALLOWED_ORIGINS`.
+
+### 3. Close the loop
+
+Back in Railway, under the service's **Variables**, add
+`ALLOWED_ORIGINS=https://<your-site>.vercel.app` — no trailing slash, because
+CORS compares origins byte for byte — and apply it so the service redeploys.
+
+Open the site and press **Run traffic**. Numbers on the canvas mean both
+variables are right. If the panel says it cannot reach the API while `/health`
+works in a tab, it is `ALLOWED_ORIGINS`.
+
+Vercel's preview deployments get their own origins, so they hit the CORS wall by
+design; add one to `ALLOWED_ORIGINS` (comma-separated) if you need it.
+
+### The same container, locally
+
+```bash
+cd backend && docker build -t sds-api . && docker run --rm -p 8000:8000 sds-api
+```
+
 ---
 
 ## How it is put together
