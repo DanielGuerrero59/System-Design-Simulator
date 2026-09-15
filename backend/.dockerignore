@@ -1,0 +1,9 @@
+# Keep the build context to what the image copies -- the source and the
+# requirements file. The venv alone is tens of megabytes the daemon would
+# otherwise upload on every build.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/
