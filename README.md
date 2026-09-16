@@ -1,5 +1,8 @@
 # System Design Simulator
 
+**Try it: <https://system-design-simulator-seven-kappa.vercel.app>.** The API it
+talks to is at <https://system-design-simulator-production-f005.up.railway.app/docs>.
+
 A browser-based tool where you visually design distributed systems — drag in load
 balancers, servers, databases, caches and queues, wire them together — and get
 real performance feedback from queueing theory rather than from a diagram that
