@@ -39,6 +39,19 @@ class NodeStatus(str, Enum):
     SATURATED = "saturated"
 
 
+class TrafficKind(str, Enum):
+    """The shapes offered load can take over time.
+
+    The engine never sees this enum -- it consumes a plain list of (time, rate)
+    steps -- so a new shape is a new profile class in traffic.py plus a schema
+    to describe it, and nothing in the graph code changes.
+    """
+
+    STEADY = "steady"
+    SPIKE = "spike"
+    RAMP = "ramp"
+
+
 # --- Service rates (mu): requests one instance completes per second ---------
 
 # An L7 load balancer does very little work per request -- parse headers, pick
@@ -97,6 +110,32 @@ UTILIZATION_CRITICAL_THRESHOLD = 0.85
 # without bound and latency is undefined rather than merely large. The engine
 # treats this as a distinct failure state, never as a very big number.
 UTILIZATION_SATURATED = 1.0
+
+
+# --- Traffic over time -----------------------------------------------------
+
+# A spike or ramp is evaluated one sample per second, each sample as its own
+# steady state (quasi-static: no queue carries over between samples). One
+# second is fine enough to draw the curve and coarse enough that a 60-second
+# window costs 61 evaluations, not thousands.
+TIMELINE_STEP_SECONDS = 1
+
+# Window defaults. Twenty seconds of baseline before a ten-second burst makes
+# the "before" unmistakable; the thirty seconds after leave room for the
+# recovery tail once queue backlog carries between samples.
+DEFAULT_TRAFFIC_DURATION_SECONDS = 60
+DEFAULT_SPIKE_START_SECONDS = 20
+DEFAULT_SPIKE_SECONDS = 10
+
+# Ceiling on the window. It bounds both the work one request can ask for (up
+# to MAX_NODES evaluations per sample) and the size of the response, which
+# carries every sample's per-node results.
+MAX_TRAFFIC_DURATION_SECONDS = 120
+
+# Engine-level guard, independent of the API ceiling above: the simulation
+# package is importable on its own, and a caller passing an enormous duration
+# must not be able to ask for an unbounded number of evaluations.
+MAX_TIMELINE_STEPS = 1_000
 
 
 # --- Input guardrails ------------------------------------------------------
