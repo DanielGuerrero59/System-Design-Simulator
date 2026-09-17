@@ -21,12 +21,21 @@ from __future__ import annotations
 
 import math
 from collections import Counter, deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .components import ComponentAnalysis, ComponentSpec, build_component
+from .components import Component, ComponentAnalysis, ComponentSpec, build_component
 from .constants import NodeStatus
+from .traffic import TrafficStep
 
-__all__ = ["SimulationError", "SimulationResult", "simulate"]
+__all__ = [
+    "SimulationError",
+    "SimulationResult",
+    "TimelineResult",
+    "TimelineStepResult",
+    "simulate",
+    "simulate_timeline",
+]
 
 # A directed hop from one node id to another.
 Edge = tuple[str, str]
@@ -49,6 +58,34 @@ class SimulationResult:
     total_latency_seconds: float | None
     bottleneck_node_id: str | None
     nodes: list[ComponentAnalysis]
+
+
+@dataclass(frozen=True)
+class TimelineStepResult:
+    """One sample of a timeline: what was offered, and what the design did with it."""
+
+    t_seconds: float
+    offered_rps: float
+    result: SimulationResult
+
+
+@dataclass(frozen=True)
+class TimelineResult:
+    """The outcome of running one design against a sequence of offered rates.
+
+    Each step is its own steady state; nothing carries over between them. See
+    traffic.py for why that is a forgiving simplification.
+    """
+
+    steps: list[TimelineStepResult]
+    # The sample closest to (or furthest past) saturation -- the moment worth
+    # showing when only one can be shown.
+    worst_index: int
+    saturated_steps: int
+
+    @property
+    def worst(self) -> SimulationResult:
+        return self.steps[self.worst_index].result
 
 
 def _build_graph(
@@ -159,34 +196,58 @@ def _critical_path_seconds(
     return max(cumulative.values())
 
 
-def simulate(
-    specs: list[ComponentSpec], edges: list[Edge], traffic_rps: float
-) -> SimulationResult:
-    """Run one design against one steady traffic rate.
-
-    Raises SimulationError if the design is not a well-formed request flow.
-    """
-    if not specs:
-        raise SimulationError("design has no components")
+def _validate_traffic_rate(traffic_rps: float) -> None:
     if not math.isfinite(traffic_rps) or traffic_rps <= 0:
         raise SimulationError(
             f"traffic must be a positive finite rate, got {traffic_rps}"
         )
 
+
+@dataclass(frozen=True)
+class _PreparedDesign:
+    """A validated design, ready to be run at any number of traffic rates.
+
+    Everything here depends only on the graph, so a timeline pays for the
+    validation and the topological sort once rather than once per sample.
+    """
+
+    node_ids: list[str]
+    order: list[str]
+    entry_node: str
+    successors: dict[str, list[str]]
+    predecessors: dict[str, list[str]]
+    components: dict[str, Component]
+
+
+def _prepare_design(specs: list[ComponentSpec], edges: list[Edge]) -> _PreparedDesign:
+    if not specs:
+        raise SimulationError("design has no components")
+
     successors, predecessors = _build_graph(specs, edges)
     node_ids = [spec.node_id for spec in specs]
     order, entry_node = _topological_order(node_ids, successors, predecessors)
 
-    components = {spec.node_id: build_component(spec) for spec in specs}
-    arrival_rates = dict.fromkeys(node_ids, 0.0)
-    arrival_rates[entry_node] = traffic_rps
+    return _PreparedDesign(
+        node_ids=node_ids,
+        order=order,
+        entry_node=entry_node,
+        successors=successors,
+        predecessors=predecessors,
+        components={spec.node_id: build_component(spec) for spec in specs},
+    )
+
+
+def _run(design: _PreparedDesign, traffic_rps: float) -> SimulationResult:
+    """Propagate one steady rate through a prepared design."""
+    arrival_rates = dict.fromkeys(design.node_ids, 0.0)
+    arrival_rates[design.entry_node] = traffic_rps
 
     analyses: dict[str, ComponentAnalysis] = {}
-    for node_id in order:
-        analysis = components[node_id].analyze(arrival_rates[node_id])
+    for node_id in design.order:
+        analysis = design.components[node_id].analyze(arrival_rates[node_id])
         analyses[node_id] = analysis
 
-        outgoing = successors[node_id]
+        outgoing = design.successors[node_id]
         if outgoing:
             share = analysis.downstream_rate_rps / len(outgoing)
             for successor in outgoing:
@@ -194,7 +255,7 @@ def simulate(
 
     # Reported in the order the caller supplied, not traversal order, so the
     # frontend can zip results against its own node list.
-    results = [analyses[node_id] for node_id in node_ids]
+    results = [analyses[node_id] for node_id in design.node_ids]
 
     is_stable = all(
         analysis.status is not NodeStatus.SATURATED for analysis in results
@@ -205,10 +266,69 @@ def simulate(
         # One infinite term makes the sum meaningless rather than merely large,
         # so an unstable design reports no total at all.
         total_latency_seconds=(
-            _critical_path_seconds(order, predecessors, analyses)
+            _critical_path_seconds(design.order, design.predecessors, analyses)
             if is_stable
             else None
         ),
         bottleneck_node_id=max(results, key=lambda a: a.utilization).node_id,
         nodes=results,
+    )
+
+
+def _peak_utilization(result: SimulationResult) -> float:
+    return max(analysis.utilization for analysis in result.nodes)
+
+
+def simulate(
+    specs: list[ComponentSpec], edges: list[Edge], traffic_rps: float
+) -> SimulationResult:
+    """Run one design against one steady traffic rate.
+
+    Raises SimulationError if the design is not a well-formed request flow.
+    """
+    design = _prepare_design(specs, edges)
+    _validate_traffic_rate(traffic_rps)
+    return _run(design, traffic_rps)
+
+
+def simulate_timeline(
+    specs: list[ComponentSpec], edges: list[Edge], steps: Sequence[TrafficStep]
+) -> TimelineResult:
+    """Run one design against a sequence of offered rates, one steady state each.
+
+    The design is validated and sorted once, then evaluated per sample. The
+    engine never sees the shape that produced the steps -- a new shape is a new
+    profile in traffic.py and nothing here changes.
+
+    Raises SimulationError for a malformed design, an empty timeline, or a
+    step whose rate is not a positive finite number.
+    """
+    if not steps:
+        raise SimulationError("traffic timeline has no steps")
+
+    design = _prepare_design(specs, edges)
+
+    results: list[TimelineStepResult] = []
+    for step in steps:
+        _validate_traffic_rate(step.rps)
+        results.append(
+            TimelineStepResult(
+                t_seconds=step.t_seconds,
+                offered_rps=step.rps,
+                result=_run(design, step.rps),
+            )
+        )
+
+    # Judged by the busiest component, which utilisation keeps well-defined
+    # past saturation because it is reported uncapped. max() returns the first
+    # maximum, so a burst is reported at the second it begins, not somewhere
+    # inside it.
+    worst_index = max(
+        range(len(results)), key=lambda i: _peak_utilization(results[i].result)
+    )
+
+    return TimelineResult(
+        steps=results,
+        worst_index=worst_index,
+        saturated_steps=sum(1 for r in results if not r.result.is_stable),
     )

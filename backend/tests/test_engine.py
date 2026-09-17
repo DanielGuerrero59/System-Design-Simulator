@@ -11,7 +11,8 @@ import pytest
 
 from app.simulation.components import ComponentSpec
 from app.simulation.constants import ComponentType, NodeStatus
-from app.simulation.engine import SimulationError, simulate
+from app.simulation.engine import SimulationError, simulate, simulate_timeline
+from app.simulation.traffic import RampProfile, SpikeProfile, SteadyProfile, TrafficStep
 
 LB = ComponentSpec("lb", ComponentType.LOAD_BALANCER)  # mu = 50_000
 API = ComponentSpec("api", ComponentType.APP_SERVER)  # mu =  2_000
@@ -194,3 +195,96 @@ class TestMalformedDesigns:
     def test_rejects_invalid_traffic(self, bad: float) -> None:
         with pytest.raises(SimulationError, match="positive finite rate"):
             simulate([API], [], bad)
+
+
+class TestTimeline:
+    """simulate_timeline: one steady state per sample, the design prepared once."""
+
+    # Baseline 1,500 with a two-second burst to 2,500 at t = 2 and 3, in a
+    # six-second window.
+    SPIKE = SpikeProfile(
+        baseline_rps=1_500.0,
+        peak_rps=2_500.0,
+        duration_seconds=6,
+        peak_start_seconds=2,
+        peak_seconds=2,
+    )
+    # 1,000 -> 3,000 over four seconds: 1,000, 1,500, 2,000, 2,500, 3,000.
+    RAMP = RampProfile(start_rps=1_000.0, end_rps=3_000.0, duration_seconds=4)
+
+    def test_time_axis_and_offered_rates_follow_the_profile(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        assert [s.t_seconds for s in timeline.steps] == [0, 1, 2, 3, 4, 5, 6]
+        assert [s.offered_rps for s in timeline.steps] == [
+            1_500, 1_500, 2_500, 2_500, 1_500, 1_500, 1_500
+        ]
+
+    def test_baseline_samples_are_the_steady_state_at_1500(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        expected_total = 1 / (50_000 - 1_500) + 1 / (2_000 - 1_500) + 1 / (5_000 - 1_500)
+        for index in (0, 1, 4, 5, 6):
+            result = timeline.steps[index].result
+            assert result.is_stable is True
+            assert by_id(result, "api").latency_seconds == pytest.approx(1 / (2_000 - 1_500))
+            assert result.total_latency_seconds == pytest.approx(expected_total)
+
+    def test_burst_samples_saturate_the_app_tier(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        for index in (2, 3):
+            result = timeline.steps[index].result
+            assert result.is_stable is False
+            assert result.total_latency_seconds is None
+            api = by_id(result, "api")
+            assert api.utilization == pytest.approx(2_500 / 2_000)
+            assert api.latency_seconds is None
+            # A healthy neighbour keeps its numbers while the app tier is down.
+            assert by_id(result, "db").latency_seconds == pytest.approx(1 / (5_000 - 2_500))
+
+    def test_worst_sample_is_the_first_second_of_the_burst(self) -> None:
+        """Both burst seconds tie on utilisation; the earlier one is reported."""
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        assert timeline.worst_index == 2
+        assert timeline.worst is timeline.steps[2].result
+        assert timeline.saturated_steps == 2
+
+    def test_ramp_crosses_saturation_at_exactly_rho_one(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.RAMP.steps())
+        api_steps = [by_id(s.result, "api") for s in timeline.steps]
+
+        assert [a.utilization for a in api_steps] == pytest.approx([0.5, 0.75, 1.0, 1.25, 1.5])
+        assert api_steps[0].latency_seconds == pytest.approx(1 / (2_000 - 1_000))
+        assert api_steps[1].latency_seconds == pytest.approx(1 / (2_000 - 1_500))
+        # rho = 1.0 is already saturated: the boundary is >=, not >.
+        assert [a.latency_seconds for a in api_steps[2:]] == [None, None, None]
+        assert timeline.worst_index == 4
+        assert timeline.saturated_steps == 3
+
+    def test_each_sample_equals_the_single_rate_entry_point(self) -> None:
+        """Independent check: simulate() is proven against hand values above."""
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.RAMP.steps())
+        for step in timeline.steps:
+            assert step.result == simulate([LB, API, DB], CHAIN, step.offered_rps)
+
+    def test_steady_profile_is_one_sample_and_is_simulate(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, SteadyProfile(1_500.0).steps())
+        assert len(timeline.steps) == 1
+        assert timeline.worst_index == 0
+        assert timeline.saturated_steps == 0
+        assert timeline.worst == simulate([LB, API, DB], CHAIN, 1_500.0)
+
+    def test_rejects_empty_timeline(self) -> None:
+        with pytest.raises(SimulationError, match="no steps"):
+            simulate_timeline([API], [], [])
+
+    def test_rejects_invalid_step_rate(self) -> None:
+        with pytest.raises(SimulationError, match="positive finite rate"):
+            simulate_timeline(
+                [API], [], [TrafficStep(0.0, 1_000.0), TrafficStep(1.0, float("nan"))]
+            )
+
+    def test_design_is_validated_before_any_sample_runs(self) -> None:
+        """A cycle is reported even though the only step would also be invalid."""
+        with pytest.raises(SimulationError, match="no entry point"):
+            simulate_timeline(
+                [LB, API], [("lb", "api"), ("api", "lb")], [TrafficStep(0.0, float("nan"))]
+            )
