@@ -13,18 +13,24 @@ testable) without FastAPI or Pydantic in the picture.
 from __future__ import annotations
 
 from collections import Counter
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Discriminator, Field, Tag, model_validator
 
 from .simulation.constants import (
+    DEFAULT_SPIKE_SECONDS,
+    DEFAULT_SPIKE_START_SECONDS,
+    DEFAULT_TRAFFIC_DURATION_SECONDS,
     MAX_EDGES,
     MAX_NODES,
     MAX_REPLICAS,
     MAX_SERVICE_RATE_RPS,
+    MAX_TRAFFIC_DURATION_SECONDS,
     MAX_TRAFFIC_RPS,
     MIN_REPLICAS,
     ComponentType,
     NodeStatus,
+    TrafficKind,
 )
 
 
@@ -94,14 +100,103 @@ class Edge(BaseModel):
     target: str = Field(min_length=1)
 
 
-class TrafficPattern(BaseModel):
-    """The load offered to the entry point of the system.
+class SteadyTraffic(BaseModel):
+    """One rate, held for the whole run: the original model, and the default.
 
-    A single steady rate for now. Spike and ramp presets will extend this
-    model rather than replace it.
+    `kind` is optional here and nowhere else, so the body every client has
+    always sent -- {"requests_per_second": N} -- keeps meaning what it meant.
     """
 
+    kind: Literal["steady"] = "steady"
     requests_per_second: float = Field(gt=0, le=MAX_TRAFFIC_RPS)
+
+
+class SpikeTraffic(BaseModel):
+    """A baseline with one burst: the shape of a launch, a sale, a retry storm.
+
+    Evaluated one sample per second, each as its own steady state. Nothing
+    carries over between samples, which is kinder to a design than a real
+    burst is -- the queue that builds during a burst drains after it, and the
+    model does not yet show that tail.
+    """
+
+    kind: Literal["spike"]
+    baseline_rps: float = Field(gt=0, le=MAX_TRAFFIC_RPS)
+    peak_rps: float = Field(
+        gt=0, le=MAX_TRAFFIC_RPS, description="Must exceed baseline_rps."
+    )
+    duration_seconds: int = Field(
+        default=DEFAULT_TRAFFIC_DURATION_SECONDS,
+        ge=1,
+        le=MAX_TRAFFIC_DURATION_SECONDS,
+        description="Length of the whole window, including time before and after the burst.",
+    )
+    peak_start_seconds: int = Field(default=DEFAULT_SPIKE_START_SECONDS, ge=0)
+    peak_seconds: int = Field(
+        default=DEFAULT_SPIKE_SECONDS,
+        ge=1,
+        description=(
+            "Burst length. The burst is the half-open window "
+            "[peak_start_seconds, peak_start_seconds + peak_seconds)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_burst_is_a_burst(self) -> SpikeTraffic:
+        """A peak at or below the baseline is not a spike, and the burst must fit."""
+        if self.peak_rps <= self.baseline_rps:
+            raise ValueError(
+                f"peak_rps must exceed baseline_rps, got {self.peak_rps} "
+                f"against {self.baseline_rps}"
+            )
+        burst_end = self.peak_start_seconds + self.peak_seconds
+        if burst_end > self.duration_seconds:
+            raise ValueError(
+                f"the burst ends at {burst_end}s, after the "
+                f"{self.duration_seconds}s window"
+            )
+        return self
+
+
+class RampTraffic(BaseModel):
+    """A straight line from start_rps at t = 0 to end_rps at t = duration.
+
+    Sweeping the rate is the clearest picture of the M/M/1 curve itself:
+    latency creeping, then turning sharply upward, then a component saturating
+    at a rate you can read off the axis. Downward ramps are allowed.
+    """
+
+    kind: Literal["ramp"]
+    start_rps: float = Field(gt=0, le=MAX_TRAFFIC_RPS)
+    end_rps: float = Field(gt=0, le=MAX_TRAFFIC_RPS)
+    duration_seconds: int = Field(
+        default=DEFAULT_TRAFFIC_DURATION_SECONDS,
+        ge=1,
+        le=MAX_TRAFFIC_DURATION_SECONDS,
+    )
+
+
+def _traffic_kind(value: Any) -> str:
+    """Choose the traffic model by its tag. A missing tag means steady.
+
+    A callable discriminator rather than Field(discriminator="kind"), because
+    that form rejects a body with no tag outright -- and the tagless body is
+    the one every existing client sends.
+    """
+    if isinstance(value, dict):
+        return value.get("kind", TrafficKind.STEADY.value)
+    return getattr(value, "kind", TrafficKind.STEADY.value)
+
+
+# The load offered to the entry point of the system: one of the shapes above.
+TrafficPattern = Annotated[
+    Union[
+        Annotated[SteadyTraffic, Tag(TrafficKind.STEADY.value)],
+        Annotated[SpikeTraffic, Tag(TrafficKind.SPIKE.value)],
+        Annotated[RampTraffic, Tag(TrafficKind.RAMP.value)],
+    ],
+    Discriminator(_traffic_kind),
+]
 
 
 class SimulationRequest(BaseModel):
@@ -168,8 +263,8 @@ class NodeResult(BaseModel):
     status: NodeStatus
 
 
-class SimulationResponse(BaseModel):
-    """The result of running one design against one traffic pattern."""
+class StepResult(BaseModel):
+    """What the simulation concluded about the whole design at one offered rate."""
 
     is_stable: bool = Field(
         description="False if any component is saturated (rho >= 1)."
@@ -185,3 +280,48 @@ class SimulationResponse(BaseModel):
         description="The component with the highest utilisation -- the one worth fixing first."
     )
     nodes: list[NodeResult]
+
+
+class TimelineStep(StepResult):
+    """One sample of the timeline: the rate that arrived, and what it did."""
+
+    t_seconds: float
+    offered_rps: float = Field(
+        description="The rate arriving at the entry point during this sample."
+    )
+
+
+class TrafficSummary(BaseModel):
+    """The shape that was run, and where in it the design hurt most."""
+
+    kind: TrafficKind
+    duration_seconds: float = Field(
+        description="Time of the last sample. 0 for a steady rate, which is a single sample."
+    )
+    peak_rps: float = Field(description="Highest offered rate in the timeline.")
+    worst_step_index: int = Field(
+        description=(
+            "Index into `timeline` of the sample the top-level fields describe: "
+            "the one whose busiest component is closest to, or furthest past, "
+            "saturation. Earliest on ties, so a burst is reported at its first second."
+        )
+    )
+    saturated_seconds: float = Field(
+        description="How much of the window had at least one saturated component."
+    )
+
+
+class SimulationResponse(StepResult):
+    """The result of running one design against one traffic pattern.
+
+    The top-level fields describe the WORST sample of the timeline. For a
+    steady rate that is the only sample, so a client written against the
+    original single-rate contract sees exactly what it always did; the full
+    sequence is in `timeline`.
+
+    Each sample is an independent steady state: no queue carries over from one
+    second to the next.
+    """
+
+    traffic: TrafficSummary
+    timeline: list[TimelineStep]

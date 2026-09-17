@@ -232,3 +232,9 @@ determine every number the app reports.
   latency and a `"saturated"` status. It never returns `Infinity`, and the UI
   never renders a figure in its place.
 - **Exactly one entry point per design.** Traffic enters the system in one place.
+- **Traffic over time is quasi-static.** A spike or ramp is evaluated one
+  sample per second, each sample as its own steady state, and the top-level
+  result is the worst sample. No queue carries over from one second to the
+  next -- which is kinder to a design than a real burst is, since the queue
+  that builds during a burst drains slowly after it. Carrying that backlog
+  forward is the planned next step.

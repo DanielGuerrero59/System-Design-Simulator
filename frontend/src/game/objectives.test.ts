@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import type { NodeResult, NodeStatus, SimulationResponse } from '../api/types'
+import type { NodeResult, NodeStatus, SimulationResponse, StepResult } from '../api/types'
 import type { DesignEdge, DesignNode } from '../design/types'
 import { assess, type AssessmentInput } from './objectives'
 import { LEVELS } from './levels'
@@ -62,14 +62,34 @@ function nodeResult(
   }
 }
 
+/**
+ * Wrap one steady-state answer the way the backend does for a steady rate: a
+ * single-sample timeline whose top level is that sample. The rate itself is
+ * immaterial to the objectives, which read utilisation and status.
+ */
+function steady(step: StepResult): SimulationResponse {
+  const rps = 2_400
+  return {
+    ...step,
+    traffic: {
+      kind: 'steady',
+      duration_seconds: 0,
+      peak_rps: rps,
+      worst_step_index: 0,
+      saturated_seconds: 0,
+    },
+    timeline: [{ t_seconds: 0, offered_rps: rps, ...step }],
+  }
+}
+
 /** A comfortable, fast answer -- so only the design under test can fail it. */
 function healthyResponse(nodeIds: string[]): SimulationResponse {
-  return {
+  return steady({
     is_stable: true,
     total_latency_ms: 1.5,
     bottleneck_node_id: nodeIds[0] ?? null,
     nodes: nodeIds.map((id) => nodeResult(id, 0.5)),
-  }
+  })
 }
 
 function input(over: Partial<AssessmentInput> = {}): AssessmentInput {
@@ -243,7 +263,7 @@ describe('the other win conditions', () => {
   })
 
   it('is not cleared with a critical node, even though nothing has saturated', () => {
-    const response: SimulationResponse = {
+    const response = steady({
       is_stable: true,
       total_latency_ms: 1,
       bottleneck_node_id: 'api-1',
@@ -251,7 +271,7 @@ describe('the other win conditions', () => {
         nodeResult('api-1', 0.9, 'critical'),
         nodeResult('db-1', 0.4, 'healthy'),
       ],
-    }
+    })
     const assessment = assess(
       input({ ...wired, result: response, isRunning: true }),
     )
@@ -260,7 +280,7 @@ describe('the other win conditions', () => {
   })
 
   it('is not cleared when a node has saturated', () => {
-    const response: SimulationResponse = {
+    const response = steady({
       is_stable: false,
       // Null, not a large number: the backend never sends a figure here.
       total_latency_ms: null,
@@ -269,7 +289,7 @@ describe('the other win conditions', () => {
         { ...nodeResult('api-1', 1.2, 'saturated'), latency_ms: null },
         nodeResult('db-1', 0.4, 'healthy'),
       ],
-    }
+    })
     const assessment = assess(
       input({ ...wired, result: response, isRunning: true }),
     )
@@ -280,12 +300,12 @@ describe('the other win conditions', () => {
   })
 
   it('is not cleared past the latency cap', () => {
-    const response: SimulationResponse = {
+    const response = steady({
       is_stable: true,
       total_latency_ms: LEVEL_ONE.latencyCapMs + 0.01,
       bottleneck_node_id: 'api-1',
       nodes: [nodeResult('api-1', 0.5), nodeResult('db-1', 0.4)],
-    }
+    })
     const assessment = assess(
       input({ ...wired, result: response, isRunning: true }),
     )
@@ -303,7 +323,7 @@ describe('objective figures do not contradict the check beside them', () => {
   it('floors utilisation so a comfortable node never reads 85%', () => {
     // 0.8462 rounds to 85, which would sit next to a green check on a row
     // reading "under 85%". The backend still calls this one a warning.
-    const response: SimulationResponse = {
+    const response = steady({
       is_stable: true,
       total_latency_ms: 1,
       bottleneck_node_id: 'api-1',
@@ -311,7 +331,7 @@ describe('objective figures do not contradict the check beside them', () => {
         nodeResult('api-1', 0.8462, 'warning'),
         nodeResult('db-1', 0.4, 'healthy'),
       ],
-    }
+    })
     const assessment = assess(
       input({ ...wired, result: response, isRunning: true }),
     )
@@ -332,12 +352,12 @@ describe('objective figures do not contradict the check beside them', () => {
   it('prints the sub-millisecond latency the panel prints', () => {
     // The seeded Level 01 figure that drifted: the objective said 0.38 while
     // the headline said 0.385.
-    const response: SimulationResponse = {
+    const response = steady({
       is_stable: true,
       total_latency_ms: 0.385,
       bottleneck_node_id: 'db-1',
       nodes: [nodeResult('api-1', 0.5), nodeResult('db-1', 0.4)],
-    }
+    })
     const assessment = assess(
       input({ ...wired, result: response, isRunning: true }),
     )

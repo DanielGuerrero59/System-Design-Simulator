@@ -18,10 +18,35 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .schemas import NodeResult, SimulationRequest, SimulationResponse
+from .schemas import (
+    NodeResult,
+    RampTraffic,
+    SimulationRequest,
+    SimulationResponse,
+    SpikeTraffic,
+    SteadyTraffic,
+    StepResult,
+    TimelineStep,
+    TrafficSummary,
+)
 from .simulation.components import ComponentSpec
-from .simulation.constants import MILLISECONDS_PER_SECOND
-from .simulation.engine import SimulationError, SimulationResult, simulate
+from .simulation.constants import (
+    MILLISECONDS_PER_SECOND,
+    TIMELINE_STEP_SECONDS,
+    TrafficKind,
+)
+from .simulation.engine import (
+    SimulationError,
+    SimulationResult,
+    TimelineResult,
+    simulate_timeline,
+)
+from .simulation.traffic import (
+    RampProfile,
+    SpikeProfile,
+    SteadyProfile,
+    TrafficProfile,
+)
 
 # The React dev server, on both common ports (Vite and Create React App).
 DEFAULT_ALLOWED_ORIGINS = [
@@ -119,9 +144,33 @@ def _to_milliseconds(seconds: float | None) -> float | None:
     return seconds * MILLISECONDS_PER_SECOND
 
 
-def _to_response(result: SimulationResult) -> SimulationResponse:
-    """Map the engine's framework-free result onto the wire format."""
-    return SimulationResponse(
+def _to_profile(traffic: SteadyTraffic | SpikeTraffic | RampTraffic) -> TrafficProfile:
+    """Map the API's description of the load onto the engine's.
+
+    Plain isinstance dispatch rather than a registry: a new shape is a new
+    schema *and* a new profile by definition, so the mapping between them is
+    part of the contract change rather than something to hide behind one.
+    """
+    if isinstance(traffic, SteadyTraffic):
+        return SteadyProfile(requests_per_second=traffic.requests_per_second)
+    if isinstance(traffic, SpikeTraffic):
+        return SpikeProfile(
+            baseline_rps=traffic.baseline_rps,
+            peak_rps=traffic.peak_rps,
+            duration_seconds=traffic.duration_seconds,
+            peak_start_seconds=traffic.peak_start_seconds,
+            peak_seconds=traffic.peak_seconds,
+        )
+    return RampProfile(
+        start_rps=traffic.start_rps,
+        end_rps=traffic.end_rps,
+        duration_seconds=traffic.duration_seconds,
+    )
+
+
+def _to_step_result(result: SimulationResult) -> StepResult:
+    """Map the engine's framework-free result for one rate onto the wire format."""
+    return StepResult(
         is_stable=result.is_stable,
         total_latency_ms=_to_milliseconds(result.total_latency_seconds),
         bottleneck_node_id=result.bottleneck_node_id,
@@ -139,6 +188,34 @@ def _to_response(result: SimulationResult) -> SimulationResponse:
     )
 
 
+def _to_response(timeline: TimelineResult, kind: TrafficKind) -> SimulationResponse:
+    """Assemble the response: the worst sample at the top level, every sample below.
+
+    Seconds are converted here, at the boundary, the same way latency becomes
+    milliseconds -- the engine counts samples and knows nothing about how far
+    apart they are.
+    """
+    steps = [
+        TimelineStep(
+            t_seconds=step.t_seconds,
+            offered_rps=step.offered_rps,
+            **dict(_to_step_result(step.result)),
+        )
+        for step in timeline.steps
+    ]
+    return SimulationResponse(
+        **dict(_to_step_result(timeline.worst)),
+        traffic=TrafficSummary(
+            kind=kind,
+            duration_seconds=timeline.steps[-1].t_seconds,
+            peak_rps=max(step.offered_rps for step in timeline.steps),
+            worst_step_index=timeline.worst_index,
+            saturated_seconds=timeline.saturated_steps * TIMELINE_STEP_SECONDS,
+        ),
+        timeline=steps,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Liveness probe, for the deploy platform and for a quick manual check."""
@@ -152,7 +229,9 @@ def simulate_design(request: SimulationRequest) -> SimulationResponse:
     Pydantic has already rejected malformed *values* by the time this runs; a
     SimulationError here means the design is structurally wrong -- a cycle, no
     entry point, several entry points -- so it maps to 422 alongside the
-    validation errors rather than to a 500.
+    validation errors rather than to a 500. The traffic profile is built
+    inside the same try for the same reason: its own checks duplicate the
+    schema's, and if the two ever disagree the caller should still see a 422.
     """
     specs = [
         ComponentSpec(
@@ -167,7 +246,8 @@ def simulate_design(request: SimulationRequest) -> SimulationResponse:
     edges = [(edge.source, edge.target) for edge in request.edges]
 
     try:
-        result = simulate(specs, edges, request.traffic.requests_per_second)
+        profile = _to_profile(request.traffic)
+        timeline = simulate_timeline(specs, edges, profile.steps())
     except (SimulationError, ValueError) as exc:
         # ValueError is caught alongside SimulationError because the engine's own
         # guards (ComponentSpec, queueing._validate_rates) raise it. Any gap
@@ -177,4 +257,4 @@ def simulate_design(request: SimulationRequest) -> SimulationResponse:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
-    return _to_response(result)
+    return _to_response(timeline, TrafficKind(request.traffic.kind))

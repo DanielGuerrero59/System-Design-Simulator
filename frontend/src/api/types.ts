@@ -48,9 +48,39 @@ export interface DesignEdge {
   target: string
 }
 
-export interface TrafficPattern {
+/** Mirrors TrafficKind. */
+export type TrafficKind = 'steady' | 'spike' | 'ramp'
+
+/** One rate held for the whole run. `kind` may be omitted: steady is the default. */
+export interface SteadyTraffic {
+  kind?: 'steady'
   requests_per_second: number
 }
+
+/**
+ * A baseline with one burst. The burst is the half-open window
+ * [peak_start_seconds, peak_start_seconds + peak_seconds); the window fields
+ * fall back to the backend's defaults when omitted.
+ */
+export interface SpikeTraffic {
+  kind: 'spike'
+  baseline_rps: number
+  /** Must exceed baseline_rps. */
+  peak_rps: number
+  duration_seconds?: number
+  peak_start_seconds?: number
+  peak_seconds?: number
+}
+
+/** A straight line from start_rps at t = 0 to end_rps at t = duration. */
+export interface RampTraffic {
+  kind: 'ramp'
+  start_rps: number
+  end_rps: number
+  duration_seconds?: number
+}
+
+export type TrafficPattern = SteadyTraffic | SpikeTraffic | RampTraffic
 
 export interface SimulationRequest {
   nodes: DesignNode[]
@@ -77,10 +107,41 @@ export interface NodeResult {
   status: NodeStatus
 }
 
-export interface SimulationResponse {
+/** What the backend concluded about the whole design at one offered rate. */
+export interface StepResult {
   is_stable: boolean
   /** Null when unstable, for the same reason as NodeResult.latency_ms. */
   total_latency_ms: number | null
   bottleneck_node_id: string | null
   nodes: NodeResult[]
+}
+
+/** One sample of the timeline: the rate that arrived, and what it did. */
+export interface TimelineStep extends StepResult {
+  t_seconds: number
+  offered_rps: number
+}
+
+export interface TrafficSummary {
+  kind: TrafficKind
+  /** Time of the last sample; 0 for a steady rate, which is a single sample. */
+  duration_seconds: number
+  peak_rps: number
+  /**
+   * Index into `timeline` of the sample the top-level fields describe: the one
+   * whose busiest component is closest to, or furthest past, saturation.
+   */
+  worst_step_index: number
+  saturated_seconds: number
+}
+
+/**
+ * The top-level fields are the WORST sample of the timeline -- for a steady
+ * rate the only one, which is why code written against the single-rate
+ * contract keeps reading them unchanged. Every sample is in `timeline`, each
+ * an independent steady state: no queue carries over between seconds.
+ */
+export interface SimulationResponse extends StepResult {
+  traffic: TrafficSummary
+  timeline: TimelineStep[]
 }
