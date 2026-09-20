@@ -208,6 +208,8 @@ export default function App() {
             level={level}
             assessment={assessment}
             totalLatencyMs={simulation.result?.total_latency_ms ?? null}
+            timeline={simulation.result?.timeline ?? null}
+            worstStepIndex={simulation.result?.traffic.worst_step_index ?? 0}
             isLive={isLive}
             bottleneckLabel={bottleneckLabel}
             error={simulation.error}

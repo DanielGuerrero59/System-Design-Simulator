@@ -16,15 +16,21 @@ import {
   WarningDiamond,
 } from '@phosphor-icons/react'
 
+import type { TimelineStep } from '../api/types'
 import type { Assessment } from '../game/objectives'
 import type { Level } from '../game/levels'
 import { formatLatencyFigure } from '../format'
+import { TimelineStrip } from './TimelineStrip'
 
 export interface ObjectivePanelProps {
   level: Level
   assessment: Assessment
   /** Null while stopped, or when the design is not simulatable. */
   totalLatencyMs: number | null
+  /** Every second of the last run. Null while stopped; one sample for a steady rate. */
+  timeline: readonly TimelineStep[] | null
+  /** Index into `timeline` of the second the headline figure describes. */
+  worstStepIndex: number
   isLive: boolean
   bottleneckLabel: string | null
   error: string | null
@@ -35,6 +41,8 @@ export function ObjectivePanel({
   level,
   assessment,
   totalLatencyMs,
+  timeline,
+  worstStepIndex,
   isLive,
   bottleneckLabel,
   error,
@@ -120,6 +128,15 @@ export function ObjectivePanel({
                 // components; this says what is actually true for one frame.
                 'Waiting on the next run.'}
         </div>
+        {/* A steady rate is one sample, and a strip of one bar would only
+            restate the number above it. Shaped levels get the picture. */}
+        {isLive && timeline !== null && timeline.length > 1 ? (
+          <TimelineStrip
+            timeline={timeline}
+            worstIndex={worstStepIndex}
+            capMs={level.latencyCapMs}
+          />
+        ) : null}
       </div>
 
       <div

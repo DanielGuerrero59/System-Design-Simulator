@@ -67,7 +67,10 @@ npm run dev
 Open <http://127.0.0.1:5173>. The frontend is a three-level game: each level
 sets a traffic target, a latency cap and a credit budget, and you have to build
 a design that meets all three. Level 01 starts with a database on the canvas —
-add an app server, wire it up, and press **Run traffic**.
+add an app server, wire it up, and press **Run traffic**. Levels 02 and 03
+shape their traffic — a ten-second burst, then a minute-long ramp — and the
+right rail draws latency second by second, so you can see the exact moment a
+design gives out.
 
 ### 3. Run the tests
 
@@ -187,7 +190,7 @@ frontend/src/
   game/             levels, objectives, and the verdict; all the rules in one place
   canvas/           React Flow wiring, the component card, the traffic source
   sidebar/          the parts bin
-  panel/            objectives, the slowest-path figure, the coaching line
+  panel/            objectives, the slowest-path figure and its second-by-second strip, the coaching line
   simulation-results/  the result store and the heat ramp
 ```
 
