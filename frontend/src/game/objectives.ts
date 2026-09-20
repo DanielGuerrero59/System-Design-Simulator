@@ -26,6 +26,7 @@ import {
 import type { DesignEdge, DesignNode } from '../design/types'
 import { formatLatencyFigure, formatRate } from '../format'
 import type { Level } from './levels'
+import { TARGET_VERB } from './traffic'
 
 export type VerdictTone = 'cleared' | 'failing' | 'idle'
 
@@ -82,7 +83,8 @@ export interface AssessmentInput {
   edges: readonly DesignEdge[]
   /** Null until a run has produced numbers for the current design. */
   result: SimulationResponse | null
-  trafficRps: number
+  /** What the dial is set to: the peak of the level's traffic shape. */
+  peakRps: number
   costCredits: number
   /** Why the design cannot be simulated at all, from `design/validate.ts`. */
   designProblem: string | null
@@ -113,7 +115,7 @@ export function assess(input: AssessmentInput): Assessment {
     nodes,
     edges,
     result,
-    trafficRps,
+    peakRps,
     costCredits,
     designProblem,
     isRunning,
@@ -121,7 +123,7 @@ export function assess(input: AssessmentInput): Assessment {
 
   const live = isRunning && result !== null
 
-  const hitsTarget = trafficRps >= level.targetRps
+  const hitsTarget = peakRps >= level.targetRps
   const isInBudget = costCredits <= level.budgetCredits
   const reachesDatabase = deliversToDatabase(nodes, edges)
 
@@ -167,8 +169,8 @@ export function assess(input: AssessmentInput): Assessment {
 
   const objectives: Objective[] = [
     {
-      label: `Serve ${formatRate(level.targetRps)}`,
-      value: formatRate(trafficRps),
+      label: `${TARGET_VERB[level.traffic.kind]} ${formatRate(level.targetRps)}`,
+      value: formatRate(peakRps),
       isMet: hitsTarget,
     },
     {
@@ -270,10 +272,20 @@ function coach(input: CoachInput): string {
     return 'ρ = λ/μ. Below 0.7 a queue is comfortable; at 0.85 it is precarious; at 1.0 it stops being a queue and becomes a backlog.'
   }
 
+  // The top-level figures describe the worst second of a shaped run. Naming
+  // that second turns "saturated" into "saturated when the burst hits", which
+  // is the thing a flat rate could never say. A steady run has one sample, and
+  // "at t = 0 s" would be noise.
+  const worstSecond =
+    result !== null && result.traffic.kind !== 'steady'
+      ? (result.timeline[result.traffic.worst_step_index]?.t_seconds ?? null)
+      : null
+
   const saturated = result?.nodes.find((node) => node.status === 'saturated')
   if (saturated) {
     const name = labelFor(nodes, saturated.node_id)
-    return `${name} is saturated — λ has caught up with μ, so its queue grows without bound and the latency is genuinely ∞, not a big number. Split the load across replicas, or put a cache in front to cut what reaches it.`
+    const when = worstSecond === null ? '' : `At t = ${worstSecond} s, `
+    return `${when}${name} is saturated — λ has caught up with μ, so its queue grows without bound and the latency is genuinely ∞, not a big number. Split the load across replicas, or put a cache in front to cut what reaches it.`
   }
 
   if (!reachesDatabase) {
@@ -292,7 +304,8 @@ function coach(input: CoachInput): string {
 
   if (!allComfortable) {
     const name = labelFor(nodes, bottleneck?.node_id ?? null).toLowerCase()
-    return `Nothing has collapsed, but ${name} is past 85% — at that point every extra request costs far more latency than the last. That curve is the whole lesson.`
+    const when = worstSecond === null ? '' : `at t = ${worstSecond} s `
+    return `Nothing has collapsed, but ${when}${name} is past 85% — at that point every extra request costs far more latency than the last. That curve is the whole lesson.`
   }
 
   if (!isFastEnough) {

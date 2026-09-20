@@ -18,12 +18,17 @@
  * If the service rates in `constants.py` are retuned and the mirrors in
  * `catalog.ts` follow, these tests are what notice that a level has become
  * unwinnable -- or free.
+ *
+ * Every run below is at the level's target, which is the *peak* of its traffic
+ * shape. Judged one steady state per second, the peak is the worst second, so
+ * a shaped level is cleared or failed at exactly the rate checked here.
  */
 
 import { describe, expect, it } from 'vitest'
 
 import type { ComponentType } from '../api/types'
 import { COMPONENT_CATALOG } from '../design/catalog'
+import { MAX_TRAFFIC_DURATION_SECONDS } from '../design/limits'
 import { LEVELS } from './levels'
 
 /** Mirrors DEFAULT_CACHE_HIT_RATIO in backend/app/simulation/constants.py. */
@@ -226,6 +231,30 @@ describe('level data is internally consistent', () => {
       expect(level.stepRps).toBeGreaterThan(0)
       // The target has to be selectable, not merely within range.
       expect(level.targetRps % level.stepRps).toBe(0)
+    },
+  )
+
+  it.each(LEVELS.map((level) => [level.name, level] as const))(
+    '%s has a traffic shape the backend will accept',
+    (_name, level) => {
+      const shape = level.traffic
+      if (shape.kind === 'steady') {
+        return
+      }
+      // Derived rates are fractions of the peak, and the API insists a burst's
+      // peak exceeds its baseline: the fraction has to sit strictly inside
+      // (0, 1) for that to hold at every dial position.
+      const fraction =
+        shape.kind === 'spike' ? shape.baselineFraction : shape.startFraction
+      expect(fraction).toBeGreaterThan(0)
+      expect(fraction).toBeLessThan(1)
+      expect(shape.durationSeconds).toBeLessThanOrEqual(MAX_TRAFFIC_DURATION_SECONDS)
+      if (shape.kind === 'spike') {
+        // The API rejects a burst that runs past the end of its window.
+        expect(shape.peakStartSeconds + shape.peakSeconds).toBeLessThanOrEqual(
+          shape.durationSeconds,
+        )
+      }
     },
   )
 

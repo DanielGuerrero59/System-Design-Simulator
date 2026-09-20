@@ -28,9 +28,38 @@
  * Note the latency caps are single-digit milliseconds. At these service rates
  * a healthy component answers in well under a millisecond, so a cap of 250 ms
  * would never bind and the objective would be free.
+ *
+ * Each level also owns the *shape* of its traffic. The dial sets the peak, and
+ * every sample of a shaped run is judged as its own steady state, so the worst
+ * second of a burst or a ramp is its peak -- which is exactly the rate the
+ * arithmetic above was done at. Shapes change what the player watches, not
+ * what the level demands. (That changes once queue backlog carries between
+ * seconds; the tuning will need revisiting then.)
  */
 
 import type { ComponentType } from '../api/types'
+
+/**
+ * How a level's offered load moves over time. The dial always sets the peak;
+ * a shape's other rates are fractions of it, so the one knob keeps working at
+ * every position.
+ */
+export type LevelTraffic =
+  | { kind: 'steady' }
+  | {
+      kind: 'spike'
+      /** Baseline as a fraction of the peak. Strictly inside (0, 1). */
+      baselineFraction: number
+      durationSeconds: number
+      peakStartSeconds: number
+      peakSeconds: number
+    }
+  | {
+      kind: 'ramp'
+      /** Starting rate as a fraction of the end rate. Strictly inside (0, 1). */
+      startFraction: number
+      durationSeconds: number
+    }
 
 export interface Level {
   /** Small label above the name, e.g. "Level 01". */
@@ -38,8 +67,10 @@ export interface Level {
   name: string
   /** One or two sentences on what this level is about. Shown in the panel. */
   blurb: string
-  /** Offered load the design has to carry to clear the level. */
+  /** Peak of the offered load the design has to carry to clear the level. */
   targetRps: number
+  /** The shape the load takes over time; `targetRps` is its peak. */
+  traffic: LevelTraffic
   /** Upper bound of the traffic dial, so a player can push past the target. */
   maxRps: number
   /** Dial granularity. Scaled per level so the slider stays usable at 30k. */
@@ -59,6 +90,7 @@ export const LEVELS: Level[] = [
     blurb:
       'Two thousand four hundred requests a second. One app server tops out at two thousand — so it can never be one app server.',
     targetRps: 2_400,
+    traffic: { kind: 'steady' },
     maxRps: 4_000,
     stepRps: 100,
     latencyCapMs: 4,
@@ -69,8 +101,18 @@ export const LEVELS: Level[] = [
     kicker: 'Level 02',
     name: 'Read storm',
     blurb:
-      'Most of this traffic is reads. The database will melt long before the servers do — and replicating it costs more than absorbing the reads.',
+      'Most of this traffic is reads, and for ten seconds it triples. The database will melt long before the servers do — and replicating it costs more than absorbing the reads.',
     targetRps: 9_000,
+    // Twenty seconds at a third of the peak, ten seconds at the peak, thirty
+    // seconds back at baseline: room to see the before, the burst, and -- once
+    // backlog carries between seconds -- the recovery.
+    traffic: {
+      kind: 'spike',
+      baselineFraction: 1 / 3,
+      durationSeconds: 60,
+      peakStartSeconds: 20,
+      peakSeconds: 10,
+    },
     maxRps: 15_000,
     stepRps: 250,
     latencyCapMs: 6,
@@ -81,8 +123,12 @@ export const LEVELS: Level[] = [
     kicker: 'Level 03',
     name: 'Black friday',
     blurb:
-      'More than three times the load, barely twice the budget. Every credit has to earn its place.',
+      'The doors open and for a full minute the load climbs without pause — to more than three times the last level’s peak, on barely twice the budget. Every credit has to earn its place.',
     targetRps: 30_000,
+    // A straight climb from a third of the peak. Sweeping the rate is the
+    // clearest picture of the M/M/1 curve itself: the second a component
+    // saturates can be read straight off the strip.
+    traffic: { kind: 'ramp', startFraction: 1 / 3, durationSeconds: 60 },
     maxRps: 48_000,
     stepRps: 500,
     latencyCapMs: 8,

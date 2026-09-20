@@ -18,6 +18,7 @@ import { useDesign } from './design/useDesign'
 import { describeDesignProblem } from './design/validate'
 import { LEVELS, levelAt } from './game/levels'
 import { assess } from './game/objectives'
+import { DIAL_LABEL, trafficFor } from './game/traffic'
 import { ObjectivePanel } from './panel/ObjectivePanel'
 import { PartsBin } from './sidebar/PartsBin'
 import {
@@ -34,7 +35,8 @@ export default function App() {
   const level = levelAt(levelIndex)
 
   const design = useDesign(FIRST_LEVEL_INDEX)
-  const [trafficRps, setTrafficRps] = useState(level.targetRps)
+  // The one traffic knob. The level supplies the shape; this is its peak.
+  const [peakRps, setPeakRps] = useState(level.targetRps)
 
   const designProblem = useMemo(
     () => describeDesignProblem(design.nodes, design.edges),
@@ -47,11 +49,13 @@ export default function App() {
   const request = useMemo(
     () =>
       designProblem === null
-        ? buildSimulationRequest(design.nodes, design.edges, {
-            requests_per_second: trafficRps,
-          })
+        ? buildSimulationRequest(
+            design.nodes,
+            design.edges,
+            trafficFor(level, peakRps),
+          )
         : null,
-    [designProblem, design.nodes, design.edges, trafficRps],
+    [designProblem, design.nodes, design.edges, level, peakRps],
   )
 
   const simulation = useSimulation({ request })
@@ -65,7 +69,7 @@ export default function App() {
         nodes: design.nodes,
         edges: design.edges,
         result: simulation.result,
-        trafficRps,
+        peakRps,
         costCredits,
         designProblem,
         isRunning: simulation.isRunning,
@@ -76,7 +80,7 @@ export default function App() {
       design.edges,
       simulation.result,
       simulation.isRunning,
-      trafficRps,
+      peakRps,
       costCredits,
       designProblem,
     ],
@@ -100,7 +104,7 @@ export default function App() {
   const switchLevel = useCallback(
     (index: number) => {
       setLevelIndex(index)
-      setTrafficRps(levelAt(index).targetRps)
+      setPeakRps(levelAt(index).targetRps)
       simulation.setRunning(false)
       design.loadLevel(index)
     },
@@ -154,7 +158,8 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             <span className="text-[10px] tracking-[0.14em] whitespace-nowrap text-neutral-500 uppercase">
-              Traffic <span className="text-[11px] normal-case">λ</span>
+              {DIAL_LABEL[level.traffic.kind]}{' '}
+              <span className="text-[11px] normal-case">λ</span>
             </span>
             {/* The floor is one step, not zero. `TrafficPattern.requests_per_second`
                 is `Field(gt=0)`, so the far-left stop of a zero-based dial sent a
@@ -165,13 +170,13 @@ export default function App() {
               min={level.stepRps}
               max={level.maxRps}
               step={level.stepRps}
-              value={trafficRps}
+              value={peakRps}
               aria-label="Traffic rate in requests per second"
-              onChange={(event) => setTrafficRps(Number(event.target.value))}
+              onChange={(event) => setPeakRps(Number(event.target.value))}
               className="w-30 shrink-0"
             />
             <span className="min-w-[86px] text-right font-heading text-[19px] tabular-nums">
-              {trafficRps.toLocaleString()} rps
+              {peakRps.toLocaleString()} rps
             </span>
           </div>
 

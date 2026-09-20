@@ -82,6 +82,29 @@ function steady(step: StepResult): SimulationResponse {
   }
 }
 
+/**
+ * A three-second burst with the same answer at every second, the worst one
+ * flagged at `worstIndex`. Only the flag matters to the objectives: they judge
+ * the top level, and the timeline exists so the coach can name the second.
+ */
+function burst(step: StepResult, worstIndex: number): SimulationResponse {
+  return {
+    ...step,
+    traffic: {
+      kind: 'spike',
+      duration_seconds: 2,
+      peak_rps: 9_000,
+      worst_step_index: worstIndex,
+      saturated_seconds: 1,
+    },
+    timeline: [0, 1, 2].map((t) => ({
+      t_seconds: t,
+      offered_rps: t === worstIndex ? 9_000 : 3_000,
+      ...step,
+    })),
+  }
+}
+
 /** A comfortable, fast answer -- so only the design under test can fail it. */
 function healthyResponse(nodeIds: string[]): SimulationResponse {
   return steady({
@@ -98,7 +121,7 @@ function input(over: Partial<AssessmentInput> = {}): AssessmentInput {
     nodes: [],
     edges: [],
     result: null,
-    trafficRps: LEVEL_ONE.targetRps,
+    peakRps: LEVEL_ONE.targetRps,
     costCredits: 0,
     designProblem: null,
     isRunning: false,
@@ -242,7 +265,7 @@ describe('the other win conditions', () => {
         ...wired,
         result: healthyResponse(['api-1', 'db-1']),
         isRunning: true,
-        trafficRps: LEVEL_ONE.targetRps - 1,
+        peakRps: LEVEL_ONE.targetRps - 1,
       }),
     )
 
@@ -394,5 +417,73 @@ describe('coaching', () => {
     )
 
     expect(assessment.tip).toContain('wire a path through to it')
+  })
+})
+
+describe('traffic shapes', () => {
+  const READ_STORM = LEVELS[1]!
+  const BLACK_FRIDAY = LEVELS[2]!
+
+  const wired = {
+    nodes: [node('api-1', 'app_server'), node('db-1', 'database')],
+    edges: [edge('api-1', 'db-1')],
+  }
+
+  const saturatedApp: StepResult = {
+    is_stable: false,
+    total_latency_ms: null,
+    bottleneck_node_id: 'api-1',
+    nodes: [
+      { ...nodeResult('api-1', 1.2, 'saturated'), latency_ms: null },
+      nodeResult('db-1', 0.4, 'healthy'),
+    ],
+  }
+
+  it('phrases the target by the shape of the level', () => {
+    expect(objective(assess(input()), 'rps').label).toBe('Serve 2,400 rps')
+    expect(
+      objective(
+        assess(input({ level: READ_STORM, peakRps: READ_STORM.targetRps })),
+        'rps',
+      ).label,
+    ).toBe('Peak of 9,000 rps')
+    expect(
+      objective(
+        assess(input({ level: BLACK_FRIDAY, peakRps: BLACK_FRIDAY.targetRps })),
+        'rps',
+      ).label,
+    ).toBe('Ramp to 30,000 rps')
+  })
+
+  it('judges the peak the dial is set to', () => {
+    const below = assess(
+      input({ level: READ_STORM, peakRps: READ_STORM.targetRps - READ_STORM.stepRps }),
+    )
+    const at = assess(input({ level: READ_STORM, peakRps: READ_STORM.targetRps }))
+
+    expect(objective(below, 'rps').isMet).toBe(false)
+    expect(objective(at, 'rps').isMet).toBe(true)
+  })
+
+  it('names the worst second of a burst', () => {
+    const assessment = assess(
+      input({
+        ...wired,
+        level: READ_STORM,
+        peakRps: READ_STORM.targetRps,
+        result: burst(saturatedApp, 1),
+        isRunning: true,
+      }),
+    )
+
+    expect(assessment.tip).toMatch(/^At t = 1 s, api-1 is saturated/)
+  })
+
+  it('does not name a second for a steady rate', () => {
+    const assessment = assess(
+      input({ ...wired, result: steady(saturatedApp), isRunning: true }),
+    )
+
+    expect(assessment.tip).toMatch(/^api-1 is saturated/)
   })
 })
