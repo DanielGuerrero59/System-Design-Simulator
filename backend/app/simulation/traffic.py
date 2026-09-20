@@ -1,15 +1,11 @@
 """Traffic profiles: the offered load as a function of time.
 
 queueing.py answers "what happens at one rate?"; this module answers "which
-rates, and when?". A profile expands into a list of (time, rate) steps and the
-engine evaluates each step as its own steady state.
-
-That quasi-static view is a deliberate simplification, and it errs on the
-forgiving side: no queue carries over from one second to the next, so a burst's
-damage ends the moment the burst does, where a real queue would take time to
-drain. Carrying backlog forward is the planned next step, and it will be a
-change to the engine rather than to this module -- the list of steps is the
-seam between "what load arrives" and "what the system does with it".
+rates, and when?". A profile expands into a list of (time, rate) steps; the
+engine solves each step as a steady state at its rate and carries whatever a
+saturated step left queued into the next one. The list of steps is the seam
+between "what load arrives" and "what the system does with it" -- a new shape
+is a new profile here, and the engine never learns its name.
 
 Like the rest of the simulation package, nothing here imports FastAPI or
 Pydantic. The API layer converts its models into the dataclasses below, which

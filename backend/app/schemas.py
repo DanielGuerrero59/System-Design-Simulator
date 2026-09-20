@@ -114,10 +114,10 @@ class SteadyTraffic(BaseModel):
 class SpikeTraffic(BaseModel):
     """A baseline with one burst: the shape of a launch, a sale, a retry storm.
 
-    Evaluated one sample per second, each as its own steady state. Nothing
-    carries over between samples, which is kinder to a design than a real
-    burst is -- the queue that builds during a burst drains after it, and the
-    model does not yet show that tail.
+    Evaluated one sample per second. A component the burst pushes over
+    capacity queues the excess, and that backlog carries into the seconds
+    after the burst, draining at the spare capacity -- so the damage outlasts
+    the burst, and the window after it is where the recovery shows.
     """
 
     kind: Literal["spike"]
@@ -251,13 +251,27 @@ class NodeResult(BaseModel):
         description="Effective mu for this component, across all its replicas."
     )
     utilization: float = Field(
-        description="rho = lambda / mu. Values >= 1.0 mean the queue grows without bound."
+        description=(
+            "rho = lambda / mu, the offered load. Values >= 1.0 mean the queue "
+            "grows without bound. Unaffected by any backlog: see `backlog`."
+        )
     )
     latency_ms: float | None = Field(
         description=(
-            "Average time in system (queue wait + service) at this component. "
-            "None when saturated: the value is infinite, and JSON has no way to "
+            "Average time in system (queue wait + service) at this component, "
+            "including the time to clear any backlog ahead of the request. None "
+            "when saturated: the value is infinite, and JSON has no way to "
             "represent infinity."
+        )
+    )
+    backlog: float = Field(
+        description=(
+            "Requests queued beyond what the steady state accounts for when this "
+            "sample begins, summed across replicas. Only ever non-zero after an "
+            "earlier sample saturated this component; it drains at the spare "
+            "capacity once the rate drops back under mu, and a component still "
+            "draining is classified by the latency that queue costs, not by "
+            "utilization alone."
         )
     )
     status: NodeStatus
@@ -277,7 +291,10 @@ class StepResult(BaseModel):
         )
     )
     bottleneck_node_id: str | None = Field(
-        description="The component with the highest utilisation -- the one worth fixing first."
+        description=(
+            "The component worth fixing first: the highest utilisation, or the "
+            "one still draining the deepest backlog when that costs more."
+        )
     )
     nodes: list[NodeResult]
 
@@ -309,6 +326,13 @@ class TrafficSummary(BaseModel):
     saturated_seconds: float = Field(
         description="How much of the window had at least one saturated component."
     )
+    recovery_seconds: float = Field(
+        description=(
+            "How much of the window was spent draining: seconds in which nothing "
+            "was saturated but some component still had a backlog from earlier. "
+            "The tail a burst leaves behind."
+        )
+    )
 
 
 class SimulationResponse(StepResult):
@@ -319,8 +343,10 @@ class SimulationResponse(StepResult):
     original single-rate contract sees exactly what it always did; the full
     sequence is in `timeline`.
 
-    Each sample is an independent steady state: no queue carries over from one
-    second to the next.
+    Each sample is solved as a steady state at its own rate, starting from the
+    backlog the previous sample left queued. A design that never saturates
+    never queues anything, and its timeline is one independent steady state
+    per second.
     """
 
     traffic: TrafficSummary

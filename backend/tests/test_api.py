@@ -72,6 +72,7 @@ class TestSimulateHappyPath:
             "service_rate_rps",
             "utilization",
             "latency_ms",
+            "backlog",
             "status",
         }
 
@@ -271,12 +272,16 @@ class TestTrafficPresets:
             "peak_rps": 1_500.0,
             "worst_step_index": 0,
             "saturated_seconds": 0,
+            "recovery_seconds": 0,
         }
         assert len(body["timeline"]) == 1
         step = body["timeline"][0]
         assert step["t_seconds"] == 0
         assert step["offered_rps"] == 1_500.0
         assert top_level(step) == top_level(body)
+        # One sample has nothing to inherit: a single-rate client sees the new
+        # field, and it is always zero.
+        assert [n["backlog"] for n in body["nodes"]] == [0.0, 0.0, 0.0]
 
     def test_explicit_steady_kind_is_identical_to_the_legacy_body(self) -> None:
         legacy = client.post("/simulate", json=design(1_500.0)).json()
@@ -299,6 +304,7 @@ class TestTrafficPresets:
             "peak_rps": 2_500.0,
             "worst_step_index": 2,
             "saturated_seconds": 2,
+            "recovery_seconds": 2,
         }
         # The top level is the first second of the burst, where the app tier
         # saturates (rho = 2,500 / 2,000 = 1.25).
@@ -310,6 +316,70 @@ class TestTrafficPresets:
         first = body["timeline"][0]
         assert first["is_stable"] is True
         assert node(first, "api")["latency_ms"] == pytest.approx(2.0)
+
+    def test_spike_reports_the_recovery_tail_in_milliseconds(self) -> None:
+        """Two seconds 500 rps over capacity queue 1,000 requests at the app tier.
+
+        The second after the burst starts with all 1,000 waiting -- 0.5 s to
+        clear at mu 2,000, on top of the 2 ms steady state -- and the spare
+        500 rps halves the pile each second: 502 ms, then 252 ms, then plain
+        2 ms with nothing queued.
+        """
+        body = client.post("/simulate", json=design(0.0, traffic=SPIKE)).json()
+        tail = [node(step, "api") for step in body["timeline"][4:]]
+
+        assert [n["backlog"] for n in tail] == pytest.approx([1_000, 500, 0])
+        assert [n["latency_ms"] for n in tail] == pytest.approx([502.0, 252.0, 2.0])
+        # Stable throughout -- the queue is shrinking -- yet red until it is gone.
+        assert [step["is_stable"] for step in body["timeline"][4:]] == [True, True, True]
+        assert [n["status"] for n in tail] == ["critical", "critical", "warning"]
+        assert [n["utilization"] for n in tail] == pytest.approx([0.75, 0.75, 0.75])
+
+    def test_level_two_burst_takes_twice_as_long_to_drain_as_it_lasted(self) -> None:
+        """The game's second level, on a design that caches nothing.
+
+        Six app servers in front of one database, 3,000 rps rising to 9,000 for
+        ten seconds. The database (mu 5,000) is 4,000 rps over capacity for the
+        whole burst, so 40,000 requests are waiting when it ends at t = 30 --
+        eight seconds' worth. Back at 3,000 rps the spare 2,000 rps needs
+        twenty seconds to clear them: the tail is twice the burst.
+        """
+        payload = design(
+            0.0,
+            traffic={
+                "kind": "spike",
+                "baseline_rps": 3_000.0,
+                "peak_rps": 9_000.0,
+                "duration_seconds": 60,
+                "peak_start_seconds": 20,
+                "peak_seconds": 10,
+            },
+        )
+        payload["nodes"][1]["config"] = {"replicas": 6}
+        body = client.post("/simulate", json=payload).json()
+        timeline = body["timeline"]
+
+        assert body["traffic"]["saturated_seconds"] == 10
+        assert body["traffic"]["recovery_seconds"] == 20
+        # Still reported at the second it broke, not the second it hurt most.
+        assert body["traffic"]["worst_step_index"] == 20
+
+        db_at = lambda t: node(timeline[t], "db")  # noqa: E731
+        assert db_at(29)["backlog"] == pytest.approx(36_000)
+        assert db_at(29)["latency_ms"] is None
+        assert db_at(30)["backlog"] == pytest.approx(40_000)
+        assert db_at(30)["latency_ms"] == pytest.approx(8_000.5)
+        assert db_at(40)["latency_ms"] == pytest.approx(4_000.5)
+        assert db_at(49)["latency_ms"] == pytest.approx(400.5)
+        assert db_at(50)["backlog"] == 0.0
+        assert db_at(50)["latency_ms"] == pytest.approx(0.5)
+
+        # The path total folds the drain into the database's term: the load
+        # balancer at 3,000 rps, six app servers at 500 rps each, then 8,000.5.
+        assert timeline[30]["total_latency_ms"] == pytest.approx(
+            1_000 / (50_000 - 3_000) + 1_000 / (2_000 - 500) + 8_000.5
+        )
+        assert timeline[30]["bottleneck_node_id"] == "db"
 
     def test_ramp_sweeps_the_rate_and_counts_saturated_seconds(self) -> None:
         body = client.post("/simulate", json=design(0.0, traffic=RAMP)).json()

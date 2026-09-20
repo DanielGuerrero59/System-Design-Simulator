@@ -181,6 +181,7 @@ def _to_step_result(result: SimulationResult) -> StepResult:
                 service_rate_rps=analysis.service_rate_rps,
                 utilization=analysis.utilization,
                 latency_ms=_to_milliseconds(analysis.latency_seconds),
+                backlog=analysis.backlog,
                 status=analysis.status,
             )
             for analysis in result.nodes
@@ -192,8 +193,8 @@ def _to_response(timeline: TimelineResult, kind: TrafficKind) -> SimulationRespo
     """Assemble the response: the worst sample at the top level, every sample below.
 
     Seconds are converted here, at the boundary, the same way latency becomes
-    milliseconds -- the engine counts samples and knows nothing about how far
-    apart they are.
+    milliseconds: the engine reports how many samples were saturated or
+    recovering, and every profile samples at TIMELINE_STEP_SECONDS.
     """
     steps = [
         TimelineStep(
@@ -211,6 +212,7 @@ def _to_response(timeline: TimelineResult, kind: TrafficKind) -> SimulationRespo
             peak_rps=max(step.offered_rps for step in timeline.steps),
             worst_step_index=timeline.worst_index,
             saturated_seconds=timeline.saturated_steps * TIMELINE_STEP_SECONDS,
+            recovery_seconds=timeline.recovery_steps * TIMELINE_STEP_SECONDS,
         ),
         timeline=steps,
     )

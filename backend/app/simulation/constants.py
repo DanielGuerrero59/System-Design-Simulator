@@ -114,15 +114,15 @@ UTILIZATION_SATURATED = 1.0
 
 # --- Traffic over time -----------------------------------------------------
 
-# A spike or ramp is evaluated one sample per second, each sample as its own
-# steady state (quasi-static: no queue carries over between samples). One
+# A spike or ramp is evaluated one sample per second, each sample a steady
+# state at its rate that starts from the backlog the previous one left. One
 # second is fine enough to draw the curve and coarse enough that a 60-second
 # window costs 61 evaluations, not thousands.
 TIMELINE_STEP_SECONDS = 1
 
 # Window defaults. Twenty seconds of baseline before a ten-second burst makes
 # the "before" unmistakable; the thirty seconds after leave room for the
-# recovery tail once queue backlog carries between samples.
+# recovery tail, which at these service rates can outlast the burst itself.
 DEFAULT_TRAFFIC_DURATION_SECONDS = 60
 DEFAULT_SPIKE_START_SECONDS = 20
 DEFAULT_SPIKE_SECONDS = 10
