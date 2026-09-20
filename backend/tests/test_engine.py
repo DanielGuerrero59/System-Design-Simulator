@@ -7,6 +7,8 @@ hand-computed arrival rate, instead of being a value copied out of a test run.
 
 from __future__ import annotations
 
+from dataclasses import replace as with_fields
+
 import pytest
 
 from app.simulation.components import ComponentSpec
@@ -198,7 +200,7 @@ class TestMalformedDesigns:
 
 
 class TestTimeline:
-    """simulate_timeline: one steady state per sample, the design prepared once."""
+    """simulate_timeline: a steady state per sample, backlog carried between them."""
 
     # Baseline 1,500 with a two-second burst to 2,500 at t = 2 and 3, in a
     # six-second window.
@@ -219,14 +221,59 @@ class TestTimeline:
             1_500, 1_500, 2_500, 2_500, 1_500, 1_500, 1_500
         ]
 
-    def test_baseline_samples_are_the_steady_state_at_1500(self) -> None:
+    def test_samples_before_the_burst_are_the_steady_state_at_1500(self) -> None:
         timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
         expected_total = 1 / (50_000 - 1_500) + 1 / (2_000 - 1_500) + 1 / (5_000 - 1_500)
-        for index in (0, 1, 4, 5, 6):
+        for index in (0, 1):
             result = timeline.steps[index].result
             assert result.is_stable is True
             assert by_id(result, "api").latency_seconds == pytest.approx(1 / (2_000 - 1_500))
             assert result.total_latency_seconds == pytest.approx(expected_total)
+
+    def test_burst_leaves_a_backlog_that_drains_after_it(self) -> None:
+        """The recovery tail, worked by hand at the app tier (mu 2,000).
+
+        The burst offers 2,500 rps, 500 over capacity, for the seconds starting
+        at t = 2 and t = 3, so 500 requests are queued when t = 3 begins and
+        1,000 when t = 4 begins. Back at 1,500 rps the spare 500 rps drains the
+        pile: 1,000 at t = 4, 500 at t = 5, empty at t = 6. A request at t = 4
+        spends the 2 ms steady state plus 1,000/2,000 = 0.5 s; at t = 5, plus
+        0.25 s; at t = 6 the tier is back to its plain 2 ms.
+        """
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        api_steps = [by_id(s.result, "api") for s in timeline.steps]
+
+        assert [a.backlog for a in api_steps] == pytest.approx([0, 0, 0, 500, 1_000, 500, 0])
+        assert api_steps[4].latency_seconds == pytest.approx(0.502)
+        assert api_steps[5].latency_seconds == pytest.approx(0.252)
+        assert api_steps[6].latency_seconds == pytest.approx(0.002)
+
+        # The rate alone is a warning (rho 0.75); the queue makes it critical
+        # until it is gone.
+        assert [a.utilization for a in api_steps[4:]] == pytest.approx([0.75, 0.75, 0.75])
+        assert [a.status for a in api_steps[4:]] == [
+            NodeStatus.CRITICAL, NodeStatus.CRITICAL, NodeStatus.WARNING
+        ]
+
+        # The tail is stable -- the queue is shrinking, not unbounded -- and the
+        # path total is the sum with the drain folded into the app tier's term.
+        tail = timeline.steps[4].result
+        assert tail.is_stable is True
+        assert tail.bottleneck_node_id == "api"
+        assert tail.total_latency_seconds == pytest.approx(
+            1 / (50_000 - 1_500) + 0.502 + 1 / (5_000 - 1_500)
+        )
+
+    def test_components_that_never_saturate_carry_no_backlog(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        for step in timeline.steps:
+            assert by_id(step.result, "lb").backlog == 0.0
+            assert by_id(step.result, "db").backlog == 0.0
+
+    def test_recovery_steps_count_the_tail(self) -> None:
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
+        assert timeline.saturated_steps == 2
+        assert timeline.recovery_steps == 2
 
     def test_burst_samples_saturate_the_app_tier(self) -> None:
         timeline = simulate_timeline([LB, API, DB], CHAIN, self.SPIKE.steps())
@@ -259,11 +306,53 @@ class TestTimeline:
         assert timeline.worst_index == 4
         assert timeline.saturated_steps == 3
 
-    def test_each_sample_equals_the_single_rate_entry_point(self) -> None:
-        """Independent check: simulate() is proven against hand values above."""
+    def test_exactly_rho_one_leaves_no_backlog(self) -> None:
+        """At 2,000 rps against mu 2,000 the queue neither grows nor drains.
+
+        So nothing is queued when t = 3 begins; the 500 rps excess during that
+        second is what t = 4 inherits. A ramp never comes back down, so there
+        is no recovery to count.
+        """
         timeline = simulate_timeline([LB, API, DB], CHAIN, self.RAMP.steps())
+        api_steps = [by_id(s.result, "api") for s in timeline.steps]
+        assert [a.backlog for a in api_steps] == pytest.approx([0, 0, 0, 0, 500])
+        assert timeline.recovery_steps == 0
+
+    def test_each_sample_equals_the_single_rate_entry_point(self) -> None:
+        """Independent check: simulate() is proven against hand values above.
+
+        Holds exactly for every sample that starts with nothing queued. The
+        ramp's last sample inherits 500 requests, and that is the only field
+        on which it differs from the single-rate answer.
+        """
+        timeline = simulate_timeline([LB, API, DB], CHAIN, self.RAMP.steps())
+        for step in timeline.steps[:4]:
+            assert step.result == simulate([LB, API, DB], CHAIN, step.offered_rps)
+
+        last = timeline.steps[4].result
+        single = simulate([LB, API, DB], CHAIN, timeline.steps[4].offered_rps)
+        assert by_id(last, "api").backlog == pytest.approx(500)
+        assert with_fields(by_id(last, "api"), backlog=0.0) == by_id(single, "api")
+
+    def test_a_design_that_never_saturates_is_the_quasi_static_timeline(self) -> None:
+        """The compatibility guarantee: no saturation, no backlog, no change.
+
+        A burst to 1,800 rps takes the app tier to rho 0.9 -- critical, but
+        under capacity -- so nothing is ever queued and every sample is exactly
+        what the single-rate model says for its rate.
+        """
+        comfortable = SpikeProfile(
+            baseline_rps=1_000.0,
+            peak_rps=1_800.0,
+            duration_seconds=6,
+            peak_start_seconds=2,
+            peak_seconds=2,
+        )
+        timeline = simulate_timeline([LB, API, DB], CHAIN, comfortable.steps())
         for step in timeline.steps:
             assert step.result == simulate([LB, API, DB], CHAIN, step.offered_rps)
+        assert timeline.saturated_steps == 0
+        assert timeline.recovery_steps == 0
 
     def test_steady_profile_is_one_sample_and_is_simulate(self) -> None:
         timeline = simulate_timeline([LB, API, DB], CHAIN, SteadyProfile(1_500.0).steps())
@@ -281,6 +370,19 @@ class TestTimeline:
             simulate_timeline(
                 [API], [], [TrafficStep(0.0, 1_000.0), TrafficStep(1.0, float("nan"))]
             )
+
+    @pytest.mark.parametrize(
+        "times",
+        [
+            (0.0, 1.0, 1.0),  # a repeated instant
+            (0.0, 2.0, 1.0),  # going backwards
+            (0.0, float("nan")),  # a time that compares False against everything
+            (0.0, float("inf")),  # a gap the backlog cannot be integrated over
+        ],
+    )
+    def test_rejects_steps_out_of_time_order(self, times: tuple[float, ...]) -> None:
+        with pytest.raises(SimulationError, match="strictly increasing time order"):
+            simulate_timeline([API], [], [TrafficStep(t, 1_000.0) for t in times])
 
     def test_design_is_validated_before_any_sample_runs(self) -> None:
         """A cycle is reported even though the only step would also be invalid."""

@@ -4,7 +4,7 @@ This is the only module that knows a design is a *graph*. queueing.py knows the
 formulas, components.py knows the component types, and this module knows how
 traffic flows between them.
 
-Two modelling decisions are made here, both simplifications worth stating
+Three modelling decisions are made here, all simplifications worth stating
 plainly because they determine every number the app reports:
 
   Fan-out splits traffic evenly. A node with three outgoing edges sends a third
@@ -15,17 +15,28 @@ plainly because they determine every number the app reports:
   Total latency is the critical path. A single request traverses one route
   through the graph, so the honest end-to-end figure is the slowest route, not
   the sum of every component in the design.
+
+  A backlog carries from one second to the next. Each sample of a timeline is
+  still solved as a steady state, but a component that was over capacity
+  leaves the excess queued, and the next sample starts with that pile in
+  front of it. It drains at the spare capacity once the rate drops back, so a
+  ten-second burst is followed by a recovery tail rather than an instant
+  return to normal. What propagates *between* components is still the
+  offered load: a saturated tier passes its full arrival rate downstream
+  rather than only what it managed to serve, so the backlog of one node never
+  reshapes the traffic another one sees.
 """
 
 from __future__ import annotations
 
 import math
 from collections import Counter, deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .components import Component, ComponentAnalysis, ComponentSpec, build_component
 from .constants import NodeStatus
+from .queueing import backlog_after
 from .traffic import TrafficStep
 
 __all__ = [
@@ -73,8 +84,8 @@ class TimelineStepResult:
 class TimelineResult:
     """The outcome of running one design against a sequence of offered rates.
 
-    Each step is its own steady state; nothing carries over between them. See
-    traffic.py for why that is a forgiving simplification.
+    Each step is solved as a steady state at its own rate, starting from the
+    backlog the previous step left behind.
     """
 
     steps: list[TimelineStepResult]
@@ -82,6 +93,9 @@ class TimelineResult:
     # showing when only one can be shown.
     worst_index: int
     saturated_steps: int
+    # Steps in which nothing was saturated but some component was still
+    # working off a backlog: the tail after a burst.
+    recovery_steps: int
 
     @property
     def worst(self) -> SimulationResult:
@@ -237,14 +251,25 @@ def _prepare_design(specs: list[ComponentSpec], edges: list[Edge]) -> _PreparedD
     )
 
 
-def _run(design: _PreparedDesign, traffic_rps: float) -> SimulationResult:
-    """Propagate one steady rate through a prepared design."""
+def _run(
+    design: _PreparedDesign,
+    traffic_rps: float,
+    backlog: Mapping[str, float] | None = None,
+) -> SimulationResult:
+    """Propagate one steady rate through a prepared design.
+
+    `backlog` is what each component starts with already queued, by node id.
+    Absent -- the single-rate case -- every component starts empty.
+    """
     arrival_rates = dict.fromkeys(design.node_ids, 0.0)
     arrival_rates[design.entry_node] = traffic_rps
 
     analyses: dict[str, ComponentAnalysis] = {}
     for node_id in design.order:
-        analysis = design.components[node_id].analyze(arrival_rates[node_id])
+        analysis = design.components[node_id].analyze(
+            arrival_rates[node_id],
+            backlog=0.0 if backlog is None else backlog[node_id],
+        )
         analyses[node_id] = analysis
 
         outgoing = design.successors[node_id]
@@ -270,13 +295,41 @@ def _run(design: _PreparedDesign, traffic_rps: float) -> SimulationResult:
             if is_stable
             else None
         ),
-        bottleneck_node_id=max(results, key=lambda a: a.utilization).node_id,
+        # Judged by effective utilisation so a component still draining a
+        # backlog outranks a merely busy one; with nothing queued anywhere the
+        # two measures are the same number.
+        bottleneck_node_id=max(results, key=lambda a: a.effective_utilization).node_id,
         nodes=results,
     )
 
 
 def _peak_utilization(result: SimulationResult) -> float:
-    return max(analysis.utilization for analysis in result.nodes)
+    return max(analysis.effective_utilization for analysis in result.nodes)
+
+
+def _validate_steps(steps: Sequence[TrafficStep]) -> None:
+    """Reject a timeline the engine cannot integrate over, before any sample runs.
+
+    Rates are checked here rather than sample by sample so a bad tenth step is
+    reported without the first nine having been solved for nothing. Times must
+    strictly increase because the gap between consecutive samples is how long
+    a backlog grows or drains; a zero or negative gap has no meaning.
+    """
+    if not steps:
+        raise SimulationError("traffic timeline has no steps")
+
+    for step in steps:
+        _validate_traffic_rate(step.rps)
+
+    for earlier, later in zip(steps, steps[1:]):
+        gap = later.t_seconds - earlier.t_seconds
+        # `not (gap > 0)` rather than `gap <= 0`: a NaN time compares False
+        # against everything and would otherwise walk straight through.
+        if not (math.isfinite(gap) and gap > 0):
+            raise SimulationError(
+                "traffic timeline steps must be in strictly increasing time "
+                f"order, got t = {earlier.t_seconds} followed by t = {later.t_seconds}"
+            )
 
 
 def simulate(
@@ -294,35 +347,51 @@ def simulate(
 def simulate_timeline(
     specs: list[ComponentSpec], edges: list[Edge], steps: Sequence[TrafficStep]
 ) -> TimelineResult:
-    """Run one design against a sequence of offered rates, one steady state each.
+    """Run one design against a sequence of offered rates, carrying backlog between them.
 
-    The design is validated and sorted once, then evaluated per sample. The
-    engine never sees the shape that produced the steps -- a new shape is a new
-    profile in traffic.py and nothing here changes.
+    The design is validated and sorted once, then evaluated per sample. Each
+    sample is a steady state at its own rate, except that every component
+    starts with whatever the previous sample left queued: the excess over
+    capacity while it was saturated, less what the spare capacity has drained
+    since. The engine never sees the shape that produced the steps -- a new
+    shape is a new profile in traffic.py and nothing here changes.
 
-    Raises SimulationError for a malformed design, an empty timeline, or a
-    step whose rate is not a positive finite number.
+    Raises SimulationError for a malformed design, an empty timeline, a step
+    whose rate is not a positive finite number, or steps out of time order.
     """
-    if not steps:
-        raise SimulationError("traffic timeline has no steps")
-
+    # Design first: a malformed graph is the bigger problem, and the message
+    # a user should see even when the timeline is wrong as well.
     design = _prepare_design(specs, edges)
+    _validate_steps(steps)
 
     results: list[TimelineStepResult] = []
-    for step in steps:
-        _validate_traffic_rate(step.rps)
+    backlog = dict.fromkeys(design.node_ids, 0.0)
+    for index, step in enumerate(steps):
+        result = _run(design, step.rps, backlog)
         results.append(
             TimelineStepResult(
-                t_seconds=step.t_seconds,
-                offered_rps=step.rps,
-                result=_run(design, step.rps),
+                t_seconds=step.t_seconds, offered_rps=step.rps, result=result
             )
         )
+        if index + 1 < len(steps):
+            # Aggregate figures in, aggregate figure out: the update is linear,
+            # so N replicas' pile against N * mu is the same arithmetic as one
+            # replica's share against mu. Held at this rate until the next
+            # sample, which _validate_steps has guaranteed comes later.
+            gap = steps[index + 1].t_seconds - step.t_seconds
+            backlog = {
+                a.node_id: backlog_after(
+                    a.backlog, a.arrival_rate_rps, a.service_rate_rps, gap
+                )
+                for a in result.nodes
+            }
 
-    # Judged by the busiest component, which utilisation keeps well-defined
-    # past saturation because it is reported uncapped. max() returns the first
-    # maximum, so a burst is reported at the second it begins, not somewhere
-    # inside it.
+    # Judged by the busiest component, which effective utilisation keeps
+    # well-defined past saturation because it is reported uncapped there.
+    # max() returns the first maximum, so a burst is reported at the second it
+    # begins, not somewhere inside it. A backlog can only exist after a sample
+    # scored above 1 and never lifts a stable sample to 1, so the worst sample
+    # is the same one the quasi-static model chose.
     worst_index = max(
         range(len(results)), key=lambda i: _peak_utilization(results[i].result)
     )
@@ -331,4 +400,9 @@ def simulate_timeline(
         steps=results,
         worst_index=worst_index,
         saturated_steps=sum(1 for r in results if not r.result.is_stable),
+        recovery_steps=sum(
+            1
+            for r in results
+            if r.result.is_stable and any(a.backlog > 0 for a in r.result.nodes)
+        ),
     )
