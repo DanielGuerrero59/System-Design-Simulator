@@ -19,7 +19,7 @@ import {
 import type { TimelineStep } from '../api/types'
 import type { Assessment } from '../game/objectives'
 import type { Level } from '../game/levels'
-import { formatLatencyFigure, formatRate } from '../format'
+import { formatRate, latencyParts } from '../format'
 import { TimelineStrip } from './TimelineStrip'
 
 export interface ObjectivePanelProps {
@@ -60,6 +60,10 @@ export function ObjectivePanel({
     focusedStepIndex !== null && timeline !== null
       ? (timeline[focusedStepIndex] ?? null)
       : null
+
+  // Figure and unit are set in different sizes, so they are taken apart here
+  // and both follow the size of the number: a tail reads "8.0 s", not "8001 ms".
+  const latency = totalLatencyMs === null ? null : latencyParts(totalLatencyMs)
 
   const latencyTint = !isLive
     ? 'var(--color-neutral-600)'
@@ -117,11 +121,11 @@ export function ObjectivePanel({
           >
             {!isLive
               ? '—'
-              : totalLatencyMs === null
+              : latency === null
                 ? '∞' // infinity sign
-                : formatLatencyFigure(totalLatencyMs)}
+                : latency.figure}
           </span>
-          <span className="text-xs text-neutral-500">ms</span>
+          <span className="text-xs text-neutral-500">{latency?.unit ?? 'ms'}</span>
         </div>
         <div className="mt-1.5 text-[11.5px] text-neutral-400">
           {!isLive

@@ -18,6 +18,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Minus, Plus, X } from '@phosphor-icons/react'
 
 import { COMPONENT_CATALOG } from '../design/catalog'
+import { formatQueue, formatShortLatency } from '../format'
 import { MAX_REPLICAS, MIN_REPLICAS } from '../design/limits'
 import type { DesignNode } from '../design/types'
 import { useNodeOutcome } from '../simulation-results/outcomes'
@@ -54,6 +55,13 @@ export const ComponentNode = memo(function ComponentNode({
   // Capped at 100% so a saturated component fills the bar rather than
   // overflowing it. The readout above still says rho >= 1, so nothing is lost.
   const barPercent = outcome ? Math.min(100, outcome.utilization * 100) : 0
+
+  // The one number that explains a red card at rho 0.60: the queue an earlier
+  // second left behind. Its own line, because "ρ 0.60 · 8.0 s · 40,000 queued"
+  // does not fit the card, and only while there is one, so the card does not
+  // carry a "0 queued" line the rest of the time.
+  const queued =
+    outcome !== null && outcome.backlog > 0 ? formatQueue(outcome.backlog) : null
 
   return (
     // Two elements, one animation each, and that split is load-bearing.
@@ -120,6 +128,14 @@ export const ComponentNode = memo(function ComponentNode({
         >
           {readout}
         </div>
+        {queued !== null ? (
+          <div
+            className="px-[9px] pt-[3px] text-[10.5px] tabular-nums whitespace-nowrap"
+            style={{ color: tint }}
+          >
+            {queued}
+          </div>
+        ) : null}
 
         {definition.isScalable ? (
           <div className="flex items-center justify-between gap-1 px-[9px] pt-[5px] pb-[7px]">
@@ -180,16 +196,4 @@ function Stepper({
       {children}
     </button>
   )
-}
-
-/**
- * Latency for the node card, where there is room for four characters and no
- * more. The fuller formatter in `format.ts` serves the panel, which can afford
- * three decimals on a sub-millisecond figure; here that would wrap.
- */
-function formatShortLatency(milliseconds: number): string {
-  if (milliseconds < 10) {
-    return `${milliseconds.toFixed(1)} ms`
-  }
-  return `${Math.round(milliseconds)} ms`
 }

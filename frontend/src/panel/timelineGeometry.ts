@@ -42,6 +42,13 @@ export interface StripLayout {
   capY: number
   /** Latency, in milliseconds, that a full-height bar stands for. */
   scaleTopMs: number
+  /**
+   * The tallest finite latency in the window, in milliseconds; 0 when every
+   * sample is saturated. Above the cap it is what sets the scale, and the
+   * caption names it, because a multi-second tail pushes the cap line down
+   * onto the axis where it no longer says what the bars are measured against.
+   */
+  peakMs: number
 }
 
 /**
@@ -64,10 +71,12 @@ export function layoutTimeline(
     .map((step) => step.total_latency_ms)
     .filter((latency): latency is number => latency !== null)
 
+  const peakMs = Math.max(0, ...finiteLatencies)
+
   // The scale covers the cap and the worst finite latency, whichever is
   // larger, so the cap line is on-screen when the design is under it and the
   // bars are on-screen when it is over.
-  const scaleTopMs = Math.max(capMs, ...finiteLatencies) * SCALE_HEADROOM
+  const scaleTopMs = Math.max(capMs, peakMs) * SCALE_HEADROOM
   const peakRps = Math.max(...timeline.map((step) => step.offered_rps))
   const columnWidth = width / timeline.length
 
@@ -95,5 +104,6 @@ export function layoutTimeline(
     samples,
     capY: height - (height * capMs) / scaleTopMs,
     scaleTopMs,
+    peakMs,
   }
 }

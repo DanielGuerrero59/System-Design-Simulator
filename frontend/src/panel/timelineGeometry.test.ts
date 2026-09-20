@@ -58,6 +58,7 @@ describe('layoutTimeline', () => {
     // max(cap 4, tallest finite 2) * 1.15
     expect(layout.scaleTopMs).toBeCloseTo(4.6, 10)
     expect(SCALE_HEADROOM).toBe(1.15)
+    expect(layout.peakMs).toBe(2)
   })
 
   it('draws a 2 ms bar at 56 * 2 / 4.6 units', () => {
@@ -118,6 +119,30 @@ describe('layoutTimeline', () => {
     expect(slowLayout.scaleTopMs).toBeCloseTo(11.5, 10)
     expect(slowLayout.capY).toBeCloseTo(HEIGHT - (HEIGHT * 4) / 11.5, 10)
     expect(slowLayout.samples[0]!.barHeight).toBeCloseTo((HEIGHT * 10) / 11.5, 10)
+    expect(slowLayout.peakMs).toBe(10)
+  })
+
+  it('lets a recovery tail set the scale and reports it as the peak', () => {
+    // Level 02's tail: 8,000.5 ms the second the burst ends, against a 6 ms
+    // cap. The cap line lands within a hair of the axis; the caption names
+    // the peak so the reader knows what the bars are drawn against.
+    const tail = [
+      step(0, 3_000, 0.5, 'healthy'),
+      step(1, 9_000, null, 'saturated'),
+      step(2, 3_000, 8_000.5, 'critical'),
+      step(3, 3_000, 0.5, 'healthy'),
+    ]
+    const tailLayout = layoutTimeline(tail, 1, 6, WIDTH, HEIGHT)
+
+    expect(tailLayout.peakMs).toBe(8_000.5)
+    expect(tailLayout.scaleTopMs).toBeCloseTo(8_000.5 * 1.15, 6)
+    expect(tailLayout.capY).toBeGreaterThan(HEIGHT - 0.05)
+    expect(tailLayout.samples[2]!.barHeight).toBeCloseTo(HEIGHT / 1.15, 6)
+  })
+
+  it('reports no peak when every sample is saturated', () => {
+    const wall = [step(0, 9_000, null, 'saturated'), step(1, 9_000, null, 'saturated')]
+    expect(layoutTimeline(wall, 0, CAP_MS, WIDTH, HEIGHT).peakMs).toBe(0)
   })
 })
 

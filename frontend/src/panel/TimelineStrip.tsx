@@ -11,6 +11,7 @@
 import type { MouseEvent } from 'react'
 
 import type { TimelineStep } from '../api/types'
+import { formatLatency } from '../format'
 import { tintFor } from '../simulation-results/statusStyles'
 import { layoutTimeline, sampleIndexAt } from './timelineGeometry'
 
@@ -144,7 +145,13 @@ export function TimelineStrip({
       </svg>
       <div className="mt-1 flex justify-between text-[10px] tabular-nums text-neutral-500">
         <span>0 s</span>
-        <span>cap {capMs} ms</span>
+        {/* Once the tallest bar is over the cap it is the bar, not the cap,
+            that sets the scale -- and under a multi-second tail the cap line
+            sits on the axis. Naming the peak says what the strip is drawn to. */}
+        <span>
+          cap {capMs} ms
+          {layout.peakMs > capMs ? ` · peak ${formatLatency(layout.peakMs)}` : ''}
+        </span>
         <span>{lastSecond} s</span>
       </div>
     </div>

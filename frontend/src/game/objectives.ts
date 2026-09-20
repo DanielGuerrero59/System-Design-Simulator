@@ -26,7 +26,7 @@ import {
   reachableFrom,
 } from '../design/graph'
 import type { DesignEdge, DesignNode } from '../design/types'
-import { formatLatencyFigure, formatRate } from '../format'
+import { formatLatency, formatRate } from '../format'
 import type { Level } from './levels'
 import { TARGET_VERB } from './traffic'
 
@@ -187,11 +187,9 @@ export function assess(input: AssessmentInput): Assessment {
       ? `${Math.floor(Math.min(999, bottleneck.utilization * 100))}%`
       : IDLE
 
-  const latencyValue = !live
-    ? IDLE
-    : result.total_latency_ms === null
-      ? '∞' // infinity sign
-      : formatLatencyFigure(result.total_latency_ms)
+  // With its unit, like the rate row: the label says "under 6 ms", and a tail
+  // measured in seconds has to be able to say so.
+  const latencyValue = !live ? IDLE : formatLatency(result.total_latency_ms)
 
   const objectives: Objective[] = [
     {

@@ -438,7 +438,7 @@ describe('objective figures do not contradict the check beside them', () => {
       input({ ...wired, result: response, isRunning: true }),
     )
 
-    expect(objective(assessment, 'Slowest path').value).toBe('0.385')
+    expect(objective(assessment, 'Slowest path').value).toBe('0.385 ms')
   })
 })
 
