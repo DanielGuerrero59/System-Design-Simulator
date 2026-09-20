@@ -137,6 +137,13 @@ MAX_TRAFFIC_DURATION_SECONDS = 120
 # must not be able to ask for an unbounded number of evaluations.
 MAX_TIMELINE_STEPS = 1_000
 
+# A backlog smaller than this is treated as empty. A drain that reaches zero in
+# exact arithmetic can land a few float ulps above it, and without a floor that
+# residue would count as one more second of recovery. A millionth of a request
+# is far below anything the model could mean and far above anything rounding
+# can produce.
+BACKLOG_EMPTY_THRESHOLD_REQUESTS = 1e-6
+
 
 # --- Input guardrails ------------------------------------------------------
 

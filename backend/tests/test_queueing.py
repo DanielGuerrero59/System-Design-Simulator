@@ -14,6 +14,9 @@ import pytest
 from app.simulation.queueing import (
     average_latency_seconds,
     average_queue_length,
+    backlog_after,
+    backlog_wait_seconds,
+    effective_utilization,
     is_stable,
     utilization,
 )
@@ -177,3 +180,116 @@ class TestAverageQueueLength:
     @pytest.mark.parametrize("arrival_rate", [1000.0, 4000.0])
     def test_saturated_returns_none(self, arrival_rate: float) -> None:
         assert average_queue_length(arrival_rate, MU) is None
+
+
+class TestBacklogAfter:
+    """B' = max(0, B + (lambda - mu) * t), worked by hand at mu = 1000."""
+
+    @pytest.mark.parametrize(
+        ("backlog", "arrival_rate", "seconds", "expected"),
+        [
+            (0.0, 1500.0, 1.0, 500.0),  # 500 over capacity for one second
+            (500.0, 1500.0, 1.0, 1000.0),  # and the pile keeps growing
+            (1000.0, 500.0, 1.0, 500.0),  # drains at the spare 500 rps
+            (1000.0, 500.0, 2.0, 0.0),  # exactly empty after two seconds
+            (300.0, 500.0, 1.0, 0.0),  # would go negative: clamped, not owed
+            (700.0, 1000.0, 5.0, 700.0),  # rho = 1: neither grows nor drains
+            (0.0, 500.0, 1.0, 0.0),  # under capacity with nothing queued stays empty
+        ],
+    )
+    def test_known_values(
+        self, backlog: float, arrival_rate: float, seconds: float, expected: float
+    ) -> None:
+        assert backlog_after(backlog, arrival_rate, MU, seconds) == pytest.approx(expected)
+
+    def test_is_linear_so_aggregate_and_per_replica_agree(self) -> None:
+        """Two replicas at mu 2,000 sharing 3,000 rps and a 1,000-request pile.
+
+        Aggregate: 1,000 + (3,000 - 4,000) * 0.5 = 500. Per replica: 500 +
+        (1,500 - 2,000) * 0.5 = 250, and two of those make the same 500.
+        """
+        aggregate = backlog_after(1000.0, 3000.0, 4000.0, 0.5)
+        per_replica = backlog_after(500.0, 1500.0, 2000.0, 0.5)
+        assert aggregate == pytest.approx(500.0)
+        assert 2 * per_replica == pytest.approx(aggregate)
+
+    def test_float_residue_reads_as_empty(self) -> None:
+        """0.1 + 0.2 is 0.30000000000000004; draining 0.3 leaves ~5e-17, not a queue."""
+        assert backlog_after(0.1 + 0.2, 0.0, 0.3, 1.0) == 0.0
+
+    def test_a_real_fraction_of_a_request_is_kept(self) -> None:
+        """The floor is for rounding residue only: a genuine half request survives."""
+        assert backlog_after(1.0, 500.0, MU, 0.001) == pytest.approx(0.5)
+
+    def test_rejects_invalid_inputs(self) -> None:
+        with pytest.raises(ValueError, match="backlog must be a non-negative finite number"):
+            backlog_after(-1.0, 500.0, MU, 1.0)
+        with pytest.raises(ValueError, match="backlog must be"):
+            backlog_after(float("nan"), 500.0, MU, 1.0)
+        with pytest.raises(ValueError, match="seconds must be a non-negative finite number"):
+            backlog_after(0.0, 500.0, MU, -1.0)
+        with pytest.raises(ValueError, match="seconds must be"):
+            backlog_after(0.0, 500.0, MU, float("inf"))
+        with pytest.raises(ValueError, match="service rate must be"):
+            backlog_after(0.0, 500.0, 0.0, 1.0)
+        with pytest.raises(ValueError, match="arrival rate must be"):
+            backlog_after(0.0, -1.0, MU, 1.0)
+
+
+class TestBacklogWait:
+    @pytest.mark.parametrize(
+        ("backlog", "service_rate", "expected_seconds"),
+        [
+            (0.0, MU, 0.0),  # nothing queued, nothing to wait for
+            (1000.0, 2000.0, 0.5),
+            (40_000.0, 5000.0, 8.0),  # a ten-second burst 4,000 rps over a database
+        ],
+    )
+    def test_known_values(
+        self, backlog: float, service_rate: float, expected_seconds: float
+    ) -> None:
+        assert backlog_wait_seconds(backlog, service_rate) == pytest.approx(expected_seconds)
+
+    def test_rejects_invalid_inputs(self) -> None:
+        with pytest.raises(ValueError, match="backlog must be"):
+            backlog_wait_seconds(-1.0, MU)
+        with pytest.raises(ValueError, match="service rate must be"):
+            backlog_wait_seconds(10.0, 0.0)
+
+
+class TestEffectiveUtilization:
+    @pytest.mark.parametrize("arrival_rate", [0.0, 500.0, 900.0, 990.0])
+    def test_inverts_the_latency_formula(self, arrival_rate: float) -> None:
+        """Round trip: the rho implied by W(lambda) is lambda / mu.
+
+        An identity between two functions, so agreement is evidence about
+        both rather than a restatement of either one's arithmetic.
+        """
+        latency = average_latency_seconds(arrival_rate, MU)
+        assert latency is not None
+        assert effective_utilization(latency, MU) == pytest.approx(arrival_rate / MU)
+
+    def test_idle_service_time_is_zero_utilisation(self) -> None:
+        """1 ms at mu 1000 is the least a request can spend here: nothing queued."""
+        assert effective_utilization(0.001, MU) == pytest.approx(0.0)
+
+    def test_a_backlog_reads_as_a_busier_queue(self) -> None:
+        """mu 2,000 at rho 0.75 with 1,000 requests queued ahead.
+
+        W = 1/(2,000 - 1,500) + 1,000/2,000 = 0.502 s, so
+        rho_eff = 1 - 1/(2,000 * 0.502) = 1 - 1/1,004: deep in the critical
+        band although the offered load alone would be a warning.
+        """
+        assert effective_utilization(0.502, 2000.0) == pytest.approx(1 - 1 / 1004)
+
+    def test_stays_below_saturation_for_any_finite_latency(self) -> None:
+        """A draining queue is slow, not unbounded: rho_eff < 1 however deep it is."""
+        assert effective_utilization(1e6, MU) < 1.0
+
+    def test_rejects_invalid_inputs(self) -> None:
+        with pytest.raises(ValueError, match="latency must be a positive finite number"):
+            effective_utilization(0.0, MU)
+        with pytest.raises(ValueError, match="latency must be"):
+            effective_utilization(float("nan"), MU)
+        with pytest.raises(ValueError, match="service rate must be"):
+            effective_utilization(0.001, 0.0)
