@@ -31,6 +31,21 @@ export class SimulationApiError extends Error {
   }
 }
 
+/**
+ * Whether a failure is the kind that goes away on its own.
+ *
+ * Status 0 is fetch itself failing -- the backend down, restarting, or (in a
+ * browser, indistinguishably) refusing this origin. 5xx is the backend or the
+ * proxy in front of it mid-deploy. Both are worth trying again in a moment. A
+ * 4xx is the design's fault, and no amount of retrying changes that answer.
+ */
+export function isTransientFailure(error: unknown): boolean {
+  return (
+    error instanceof SimulationApiError &&
+    (error.status === 0 || error.status >= 500)
+  )
+}
+
 /** One entry in FastAPI's validation-error array. */
 interface ValidationErrorItem {
   loc?: (string | number)[]

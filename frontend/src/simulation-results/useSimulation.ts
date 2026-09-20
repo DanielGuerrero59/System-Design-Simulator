@@ -17,11 +17,19 @@
  *   is only published while that request is still the current one. That single
  *   rule covers both an out-of-order response overwriting a newer answer, and a
  *   previous answer being re-shown as live after the design has moved on.
+ *
+ * Keying has one consequence that needs its own mechanism. An error is keyed
+ * like an answer, so a failure to *reach* the backend -- a redeploy in
+ * progress, a cold start -- would stay on screen until the design or the dial
+ * changed, however quickly the backend came back. So a transient failure is
+ * retried on a backoff while the traffic is running, and the banner clears
+ * itself with the first answer. A rejected design is not retried: the answer
+ * would be the same.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { SimulationApiError, simulate } from '../api/client'
+import { SimulationApiError, isTransientFailure, simulate } from '../api/client'
 import type { SimulationRequest, SimulationResponse } from '../api/types'
 
 /**
@@ -32,6 +40,20 @@ import type { SimulationRequest, SimulationResponse } from '../api/types'
  * rather than one per pixel.
  */
 const DEBOUNCE_MS = 150
+
+/**
+ * The wait before a transient failure is tried again, doubling per
+ * consecutive failure. Two seconds catches the usual case -- a deploy
+ * switching over -- on the first retry; the ceiling keeps a backend that is
+ * down for the afternoon from being polled like a heartbeat.
+ */
+const RETRY_BASE_MS = 2_000
+const RETRY_MAX_MS = 30_000
+
+/** 2 s, 4 s, 8 s, 16 s, then 30 s for as long as it keeps failing. */
+export function retryDelayMs(consecutiveFailures: number): number {
+  return Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** consecutiveFailures)
+}
 
 /** An answer, plus the exact request it is an answer to. */
 interface Outcome {
@@ -58,8 +80,15 @@ export function useSimulation(input: SimulationInput): SimulationStore {
 
   const [outcome, setOutcome] = useState<Outcome | null>(null)
   const [isRunning, setIsRunning] = useState(false)
+  // Bumped to re-run the request after a transient failure. Only ever changes
+  // from inside the effect below, on the timer it arms.
+  const [attempt, setAttempt] = useState(0)
 
   const abortRef = useRef<AbortController | null>(null)
+  // Consecutive transient failures of the *current* request, for the backoff.
+  // Reset on success and whenever the request changes.
+  const failuresRef = useRef(0)
+  const failingKeyRef = useRef<string | null>(null)
 
   // Serialised rather than depended on directly: `request` is a fresh object
   // every render, so using it as a dependency would restart the debounce on
@@ -73,6 +102,13 @@ export function useSimulation(input: SimulationInput): SimulationStore {
       return
     }
 
+    if (failingKeyRef.current !== requestKey) {
+      failingKeyRef.current = requestKey
+      failuresRef.current = 0
+    }
+
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
     const timer = setTimeout(() => {
       abortRef.current?.abort()
       const controller = new AbortController()
@@ -80,6 +116,7 @@ export function useSimulation(input: SimulationInput): SimulationStore {
 
       simulate(JSON.parse(requestKey) as SimulationRequest, controller.signal)
         .then((response) => {
+          failuresRef.current = 0
           setOutcome({ key: requestKey, response, error: null })
         })
         .catch((cause: unknown) => {
@@ -96,13 +133,26 @@ export function useSimulation(input: SimulationInput): SimulationStore {
                 ? cause.message
                 : 'The simulation failed for an unknown reason.',
           })
+          if (isTransientFailure(cause)) {
+            // The banner stays up meanwhile -- it says what is wrong -- and the
+            // first answer takes it down. Bumping `attempt` re-runs this effect
+            // with the same key, which is what makes the retry a retry.
+            retryTimer = setTimeout(
+              () => setAttempt((count) => count + 1),
+              retryDelayMs(failuresRef.current),
+            )
+            failuresRef.current += 1
+          }
         })
     }, DEBOUNCE_MS)
 
     return () => {
       clearTimeout(timer)
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer)
+      }
     }
-  }, [isRunning, requestKey])
+  }, [isRunning, requestKey, attempt])
 
   // Abort whatever is in flight when the component goes away.
   useEffect(() => {
