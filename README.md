@@ -70,7 +70,7 @@ a design that meets all three. Level 01 starts with a database on the canvas —
 add an app server, wire it up, and press **Run traffic**. Levels 02 and 03
 shape their traffic — a ten-second burst, then a minute-long ramp — and the
 right rail draws latency second by second, so you can see the exact moment a
-design gives out.
+design gives out, and how long it takes to recover once the burst has passed.
 
 ### 3. Run the tests
 
@@ -178,9 +178,9 @@ cd backend && docker build -t sds-api . && docker run --rm -p 8000:8000 sds-api
 backend/app/
   simulation/
     constants.py    service rates, thresholds, input ceilings — every tunable number
-    queueing.py     the M/M/1 formulas, framework-free
+    queueing.py     the M/M/1 formulas and the backlog formulas, framework-free
     components.py   one class per component type, behind a self-registering registry
-    engine.py       graph validation, traffic propagation, critical path
+    engine.py       graph validation, traffic propagation, critical path, backlog over time
   schemas.py        the /simulate request and response contract
   main.py           FastAPI app, CORS, error handling
 
@@ -235,9 +235,24 @@ determine every number the app reports.
   latency and a `"saturated"` status. It never returns `Infinity`, and the UI
   never renders a figure in its place.
 - **Exactly one entry point per design.** Traffic enters the system in one place.
-- **Traffic over time is quasi-static.** A spike or ramp is evaluated one
-  sample per second, each sample as its own steady state, and the top-level
-  result is the worst sample. No queue carries over from one second to the
-  next -- which is kinder to a design than a real burst is, since the queue
-  that builds during a burst drains slowly after it. Carrying that backlog
-  forward is the planned next step.
+- **A burst leaves a backlog.** A spike or ramp is evaluated one sample per
+  second, each sample a steady state at its own rate, and the top-level result
+  is the worst sample. What carries from one second to the next is the
+  *backlog*: while a component is over capacity the excess piles up at
+  `λ − μ` per second, and once the rate drops back the pile drains at the
+  spare capacity `μ − λ`. A request arriving during the drain spends the
+  steady-state `1/(μ − λ)` plus `backlog / μ` to clear what is already queued,
+  so a ten-second burst that saturates a database at 4,000 rps over capacity
+  leaves 40,000 requests — eight seconds' worth — and twenty seconds of
+  recovery behind it. A component still draining is classified by the latency
+  that queue costs rather than by `ρ` alone, so the tail reads red on the
+  canvas even though `ρ` is back under 0.7. A design that never saturates
+  never queues anything, and every second of its timeline is the plain
+  steady state at that second's rate.
+- **Saturated seconds report no latency, even with a backlog.** Over capacity
+  there is no steady state to add a drain time to, so the latency is still
+  `null` and the backlog is reported on its own. The finite figures live in the
+  recovery seconds, where the queue is shrinking.
+- **What flows between components is the offered load.** A saturated tier
+  passes its full arrival rate downstream, not only what it managed to serve,
+  so one component's backlog never reshapes the traffic another one sees.
