@@ -16,3 +16,10 @@ export const MAX_REPLICAS = 1_000
 /** Ceilings on design size, so one request cannot hand the server huge work. */
 export const MAX_NODES = 200
 export const MAX_EDGES = 1_000
+
+/**
+ * Longest traffic window, in seconds. A spike or ramp is evaluated one sample
+ * per second, and the response carries every sample, so the ceiling bounds the
+ * payload as much as the work.
+ */
+export const MAX_TRAFFIC_DURATION_SECONDS = 120

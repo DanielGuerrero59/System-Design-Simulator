@@ -47,7 +47,9 @@ export default function App() {
   const request = useMemo(
     () =>
       designProblem === null
-        ? buildSimulationRequest(design.nodes, design.edges, trafficRps)
+        ? buildSimulationRequest(design.nodes, design.edges, {
+            requests_per_second: trafficRps,
+          })
         : null,
     [designProblem, design.nodes, design.edges, trafficRps],
   )

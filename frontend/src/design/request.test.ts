@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ComponentType } from '../api/types'
+import type { TrafficPattern } from '../api/types'
 import { buildSimulationRequest } from './request'
 import type { DesignEdge, DesignNode } from './types'
 
@@ -38,12 +39,31 @@ const edge = (source: string, target: string): DesignEdge => ({
   target,
 })
 
+/** The legacy body: one steady rate, no `kind`. */
+const STEADY: TrafficPattern = { requests_per_second: 1000 }
+
 describe('buildSimulationRequest', () => {
+  it('passes the traffic through untouched, whatever its shape', () => {
+    // The shape is the level's decision, made in game/traffic.ts. This function
+    // must not reinterpret it -- a spike has to reach the wire as a spike.
+    const spike: TrafficPattern = {
+      kind: 'spike',
+      baseline_rps: 3000,
+      peak_rps: 9000,
+      duration_seconds: 60,
+      peak_start_seconds: 20,
+      peak_seconds: 10,
+    }
+    const request = buildSimulationRequest([node('api-1', 'app_server')], [], spike)
+
+    expect(request.traffic).toEqual(spike)
+  })
+
   it('sends ids, types and replicas', () => {
     const request = buildSimulationRequest(
       [node('api-1', 'app_server', { replicas: 4 })],
       [],
-      1000,
+      STEADY,
     )
 
     expect(request.nodes).toEqual([
@@ -57,7 +77,7 @@ describe('buildSimulationRequest', () => {
     // are also what lets a dragged node keep its numbers -- the serialised
     // request is the staleness key in `useSimulation`.
     const serialised = JSON.stringify(
-      buildSimulationRequest([node('api-1', 'app_server')], [], 1000),
+      buildSimulationRequest([node('api-1', 'app_server')], [], STEADY),
     )
 
     expect(serialised).not.toContain('123')
@@ -68,7 +88,7 @@ describe('buildSimulationRequest', () => {
     const [first] = buildSimulationRequest(
       [node('db-1', 'database')],
       [],
-      1000,
+      STEADY,
     ).nodes
 
     expect(first?.config && 'service_rate_rps' in first.config).toBe(false)
@@ -78,7 +98,7 @@ describe('buildSimulationRequest', () => {
     const [first] = buildSimulationRequest(
       [node('cache-1', 'cache', { hitRatio: 0.9 })],
       [],
-      1000,
+      STEADY,
     ).nodes
 
     expect(first?.config?.hit_ratio).toBe(0.9)
@@ -90,7 +110,7 @@ describe('buildSimulationRequest', () => {
     const [first] = buildSimulationRequest(
       [node('db-1', 'database', { hitRatio: 0.9 })],
       [],
-      1000,
+      STEADY,
     ).nodes
 
     expect(first?.config && 'hit_ratio' in first.config).toBe(false)
@@ -100,7 +120,7 @@ describe('buildSimulationRequest', () => {
     const request = buildSimulationRequest(
       [node('api-1', 'app_server'), node('db-1', 'database')],
       [edge('api-1', 'db-1'), edge('api-1', 'db-1')],
-      1000,
+      STEADY,
     )
 
     expect(request.edges).toEqual([{ source: 'api-1', target: 'db-1' }])

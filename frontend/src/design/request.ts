@@ -7,7 +7,13 @@
  * about -- and to test -- with no hooks around it.
  */
 
-import type { DesignEdge as WireEdge, DesignNode as WireNode, NodeConfig, SimulationRequest } from '../api/types'
+import type {
+  DesignEdge as WireEdge,
+  DesignNode as WireNode,
+  NodeConfig,
+  SimulationRequest,
+  TrafficPattern,
+} from '../api/types'
 import { dedupeEdges } from './graph'
 import type { DesignEdge, DesignNode } from './types'
 
@@ -17,11 +23,15 @@ import type { DesignEdge, DesignNode } from './types'
  * Two things are deliberately dropped on the way: positions, because where a
  * box sits on screen has no effect on queueing, and labels, because the backend
  * identifies components by id and would reject an unknown field.
+ *
+ * The traffic arrives already in wire form. Its shape is the level's business
+ * (`game/traffic.ts`), and this function's is the design; keeping the two apart
+ * means a new traffic shape never touches the code that serialises a diagram.
  */
 export function buildSimulationRequest(
   nodes: readonly DesignNode[],
   edges: readonly DesignEdge[],
-  trafficRps: number,
+  traffic: TrafficPattern,
 ): SimulationRequest {
   const wireNodes: WireNode[] = nodes.map((node) => {
     const config: NodeConfig = { replicas: node.data.replicas }
@@ -51,6 +61,6 @@ export function buildSimulationRequest(
   return {
     nodes: wireNodes,
     edges: wireEdges,
-    traffic: { requests_per_second: trafficRps },
+    traffic,
   }
 }
