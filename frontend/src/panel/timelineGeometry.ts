@@ -44,6 +44,15 @@ export interface StripLayout {
   scaleTopMs: number
 }
 
+/**
+ * Which sample a pointer is over, from its horizontal position as a fraction
+ * of the strip's width. Clamped, because a pointer at the very right edge
+ * reports a fraction of 1.0 and floor(1.0 * count) is one past the end.
+ */
+export function sampleIndexAt(fraction: number, count: number): number {
+  return Math.min(count - 1, Math.max(0, Math.floor(fraction * count)))
+}
+
 export function layoutTimeline(
   timeline: readonly TimelineStep[],
   worstIndex: number,

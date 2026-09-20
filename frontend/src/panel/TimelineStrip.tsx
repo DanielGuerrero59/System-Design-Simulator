@@ -8,9 +8,11 @@
  * dependency would be the heaviest thing in the bundle for it.
  */
 
+import type { MouseEvent } from 'react'
+
 import type { TimelineStep } from '../api/types'
 import { tintFor } from '../simulation-results/statusStyles'
-import { layoutTimeline } from './timelineGeometry'
+import { layoutTimeline, sampleIndexAt } from './timelineGeometry'
 
 /** ViewBox size. The SVG stretches to the card's width; the height is fixed. */
 const WIDTH = 240
@@ -24,6 +26,13 @@ export interface TimelineStripProps {
   worstIndex: number
   /** The level's latency cap, drawn as a dashed line. */
   capMs: number
+  /** The second under the pointer, or null when the pointer is elsewhere. */
+  focusedIndex: number | null
+  /**
+   * Hovering a second replays it: the canvas and the headline figure show that
+   * sample instead of the worst one. Called with null when the pointer leaves.
+   */
+  onScrub: (index: number | null) => void
 }
 
 /**
@@ -48,9 +57,29 @@ function describe(timeline: readonly TimelineStep[], worstIndex: number): string
   return `${window}, saturated for ${saturated.length} s from t = ${saturated[0]!.t_seconds} s; ${worst}.`
 }
 
-export function TimelineStrip({ timeline, worstIndex, capMs }: TimelineStripProps) {
+export function TimelineStrip({
+  timeline,
+  worstIndex,
+  capMs,
+  focusedIndex,
+  onScrub,
+}: TimelineStripProps) {
   const layout = layoutTimeline(timeline, worstIndex, capMs, WIDTH, HEIGHT)
   const lastSecond = timeline[timeline.length - 1]?.t_seconds ?? 0
+  const focused = focusedIndex === null ? null : layout.samples[focusedIndex]
+
+  const handleMove = (event: MouseEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const index = sampleIndexAt(
+      (event.clientX - bounds.left) / bounds.width,
+      timeline.length,
+    )
+    // Only report crossings: mousemove fires many times per column, and each
+    // call re-renders the canvas.
+    if (index !== focusedIndex) {
+      onScrub(index)
+    }
+  }
 
   return (
     <div className="mt-2.5">
@@ -61,12 +90,23 @@ export function TimelineStrip({ timeline, worstIndex, capMs }: TimelineStripProp
         preserveAspectRatio="none"
         role="img"
         aria-label={describe(timeline, worstIndex)}
-        className="block"
+        className="block cursor-crosshair"
+        onMouseMove={handleMove}
+        onMouseLeave={() => onScrub(null)}
       >
         <path
           d={ratePath(layout.samples)}
           fill="color-mix(in srgb, var(--color-accent) 16%, transparent)"
         />
+        {focused ? (
+          <rect
+            x={focused.x}
+            y={0}
+            width={focused.width}
+            height={HEIGHT}
+            fill="color-mix(in srgb, var(--color-text) 12%, transparent)"
+          />
+        ) : null}
         {layout.samples.map((sample, index) => (
           <rect
             key={index}
@@ -75,6 +115,9 @@ export function TimelineStrip({ timeline, worstIndex, capMs }: TimelineStripProp
             width={Math.max(0, sample.width - BAR_GAP * 2)}
             height={sample.barHeight}
             fill={tintFor(sample.status)}
+            // While one second is under the pointer the others step back, so
+            // the canvas and the bar it is showing read as one thing.
+            opacity={focusedIndex === null || focusedIndex === index ? 1 : 0.55}
             // The worst second is what the headline figure describes; the
             // outline ties the number to its bar.
             stroke={sample.isWorst ? 'var(--color-text)' : 'none'}

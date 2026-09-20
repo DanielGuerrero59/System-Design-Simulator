@@ -19,7 +19,7 @@ import {
 import type { TimelineStep } from '../api/types'
 import type { Assessment } from '../game/objectives'
 import type { Level } from '../game/levels'
-import { formatLatencyFigure } from '../format'
+import { formatLatencyFigure, formatRate } from '../format'
 import { TimelineStrip } from './TimelineStrip'
 
 export interface ObjectivePanelProps {
@@ -31,6 +31,9 @@ export interface ObjectivePanelProps {
   timeline: readonly TimelineStep[] | null
   /** Index into `timeline` of the second the headline figure describes. */
   worstStepIndex: number
+  /** The second under the pointer on the strip, if any; the headline follows it. */
+  focusedStepIndex: number | null
+  onScrub: (index: number | null) => void
   isLive: boolean
   bottleneckLabel: string | null
   error: string | null
@@ -43,6 +46,8 @@ export function ObjectivePanel({
   totalLatencyMs,
   timeline,
   worstStepIndex,
+  focusedStepIndex,
+  onScrub,
   isLive,
   bottleneckLabel,
   error,
@@ -50,6 +55,11 @@ export function ObjectivePanel({
 }: ObjectivePanelProps) {
   const { objectives, isCleared, verdictText, verdictTone, tip, bottleneck } =
     assessment
+
+  const focusedStep =
+    focusedStepIndex !== null && timeline !== null
+      ? (timeline[focusedStepIndex] ?? null)
+      : null
 
   const latencyTint = !isLive
     ? 'var(--color-neutral-600)'
@@ -116,7 +126,9 @@ export function ObjectivePanel({
         <div className="mt-1.5 text-[11.5px] text-neutral-400">
           {!isLive
             ? 'Press run to push traffic through.'
-            : bottleneck && bottleneckLabel
+            : focusedStep
+              ? `t = ${focusedStep.t_seconds} s · ${formatRate(focusedStep.offered_rps)}`
+              : bottleneck && bottleneckLabel
               ? `Busiest: ${bottleneckLabel} at ρ ${
                   bottleneck.utilization >= 1
                     ? '≥ 1'
@@ -135,6 +147,8 @@ export function ObjectivePanel({
             timeline={timeline}
             worstIndex={worstStepIndex}
             capMs={level.latencyCapMs}
+            focusedIndex={focusedStepIndex}
+            onScrub={onScrub}
           />
         ) : null}
       </div>

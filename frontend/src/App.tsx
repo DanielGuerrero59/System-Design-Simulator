@@ -60,6 +60,24 @@ export default function App() {
 
   const simulation = useSimulation({ request })
 
+  // The second under the pointer on the timeline strip. Null means the worst
+  // second, which is what the top-level result already describes. Read through
+  // the current result so an index left over from a longer timeline reads as
+  // nothing rather than as some other second.
+  const [scrubIndex, setScrubIndex] = useState<number | null>(null)
+  const focusedStep =
+    scrubIndex === null
+      ? null
+      : (simulation.result?.timeline[scrubIndex] ?? null)
+
+  const setRunning = useCallback(
+    (running: boolean) => {
+      setScrubIndex(null)
+      simulation.setRunning(running)
+    },
+    [simulation],
+  )
+
   const costCredits = useMemo(() => designCost(design.nodes), [design.nodes])
 
   const assessment = useMemo(
@@ -88,27 +106,32 @@ export default function App() {
 
   const isLive = simulation.isRunning && simulation.result !== null
 
+  // The canvas shows the hovered second when there is one, else the worst.
+  // The assessment above deliberately does not follow the pointer: the score
+  // is about the worst second, and a verdict that flickered as the pointer
+  // crossed the strip would be a verdict about nothing.
   const outcomes = useMemo<OutcomeLookup>(() => {
     const result = simulation.result
     if (result === null || !simulation.isRunning) {
       return NO_OUTCOMES
     }
+    const shown = focusedStep ?? result
     return {
       byNodeId: new Map(
-        result.nodes.map((nodeResult) => [nodeResult.node_id, nodeResult]),
+        shown.nodes.map((nodeResult) => [nodeResult.node_id, nodeResult]),
       ),
       isLive: true,
     }
-  }, [simulation.result, simulation.isRunning])
+  }, [simulation.result, simulation.isRunning, focusedStep])
 
   const switchLevel = useCallback(
     (index: number) => {
       setLevelIndex(index)
       setPeakRps(levelAt(index).targetRps)
-      simulation.setRunning(false)
+      setRunning(false)
       design.loadLevel(index)
     },
-    [design, simulation],
+    [design, setRunning],
   )
 
   const bottleneckLabel = useMemo(() => {
@@ -182,7 +205,7 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => simulation.setRunning(!simulation.isRunning)}
+            onClick={() => setRunning(!simulation.isRunning)}
             className="flex shrink-0 items-center gap-1.5 rounded-md border border-accent
                        px-3 py-1.5 font-heading text-sm font-medium whitespace-nowrap
                        text-accent transition-colors
@@ -207,9 +230,13 @@ export default function App() {
           <ObjectivePanel
             level={level}
             assessment={assessment}
-            totalLatencyMs={simulation.result?.total_latency_ms ?? null}
+            totalLatencyMs={
+              (focusedStep ?? simulation.result)?.total_latency_ms ?? null
+            }
             timeline={simulation.result?.timeline ?? null}
             worstStepIndex={simulation.result?.traffic.worst_step_index ?? 0}
+            focusedStepIndex={focusedStep === null ? null : scrubIndex}
+            onScrub={setScrubIndex}
             isLive={isLive}
             bottleneckLabel={bottleneckLabel}
             error={simulation.error}

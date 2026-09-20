@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { NodeStatus, TimelineStep } from '../api/types'
-import { SCALE_HEADROOM, layoutTimeline } from './timelineGeometry'
+import { SCALE_HEADROOM, layoutTimeline, sampleIndexAt } from './timelineGeometry'
 
 const WIDTH = 240
 const HEIGHT = 56
@@ -117,5 +117,20 @@ describe('layoutTimeline', () => {
     expect(slowLayout.scaleTopMs).toBeCloseTo(11.5, 10)
     expect(slowLayout.capY).toBeCloseTo(HEIGHT - (HEIGHT * 4) / 11.5, 10)
     expect(slowLayout.samples[0]!.barHeight).toBeCloseTo((HEIGHT * 10) / 11.5, 10)
+  })
+})
+
+describe('sampleIndexAt', () => {
+  it('maps a fraction of the width onto a column', () => {
+    // 7 columns: the second column spans [1/7, 2/7).
+    expect(sampleIndexAt(1.5 / 7, 7)).toBe(1)
+    expect(sampleIndexAt(0, 7)).toBe(0)
+  })
+
+  it('clamps both edges', () => {
+    // A pointer on the right edge reports exactly 1.0, one column past the end.
+    expect(sampleIndexAt(1, 7)).toBe(6)
+    expect(sampleIndexAt(1.2, 7)).toBe(6)
+    expect(sampleIndexAt(-0.1, 7)).toBe(0)
   })
 })
