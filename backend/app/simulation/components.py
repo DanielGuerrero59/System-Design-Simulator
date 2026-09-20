@@ -8,6 +8,10 @@ the two questions the formulas deliberately do not:
   2. How much traffic does it pass downstream? Most components forward
      everything; a cache absorbs its hits.
 
+It also folds in the one piece of history a component can carry: a backlog
+left behind by an earlier second of saturation. The engine owns that state
+and hands it in per call; nothing here remembers anything between calls.
+
 Like queueing.py, this module imports nothing from schemas.py or FastAPI. The
 API layer converts its Pydantic models into the plain ComponentSpec below, so
 the engine stays testable without either dependency.
@@ -29,7 +33,12 @@ from .constants import (
     ComponentType,
     NodeStatus,
 )
-from .queueing import average_latency_seconds, utilization
+from .queueing import (
+    average_latency_seconds,
+    backlog_wait_seconds,
+    effective_utilization,
+    utilization,
+)
 
 __all__ = [
     "Component",
@@ -81,14 +90,28 @@ class ComponentSpec:
 
 @dataclass(frozen=True)
 class ComponentAnalysis:
-    """What the simulation concluded about one component at one traffic level."""
+    """What the simulation concluded about one component at one instant.
+
+    Every figure is as of that instant: the rate arriving from then on, and
+    the queue a request arriving then finds ahead of it.
+    """
 
     node_id: str
     component_type: ComponentType
     arrival_rate_rps: float
     service_rate_rps: float
+    # rho = lambda / mu, the offered load. Unchanged by any backlog: it is the
+    # number the user controls, and the one every formula is stated in.
     utilization: float
+    # Steady-state time plus the wait for the backlog. None when saturated.
     latency_seconds: float | None
+    # Requests queued beyond the steady state when this instant began, summed
+    # across replicas. Zero unless an earlier sample saturated this component.
+    backlog: float
+    # The rho a steady queue would need to be this slow: equal to utilization
+    # when the backlog is zero, higher while one drains, and the figure the
+    # status and the bottleneck are judged by. See queueing.effective_utilization.
+    effective_utilization: float
     status: NodeStatus
     downstream_rate_rps: float
 
@@ -97,7 +120,9 @@ def _status_for(rho: float) -> NodeStatus:
     """Map utilisation onto the traffic-light status.
 
     Checked most-severe first so the bands cannot overlap. The thresholds
-    themselves live in constants.py, with the reasoning for each.
+    themselves live in constants.py, with the reasoning for each. Callers pass
+    the *effective* utilisation, so a component slowed by a backlog is judged
+    by the queue it actually has rather than by the rate alone.
     """
     if rho >= UTILIZATION_SATURATED:
         return NodeStatus.SATURATED
@@ -176,7 +201,9 @@ class Component(ABC):
         """Traffic this component passes on. Everything, unless overridden."""
         return arrival_rate_rps
 
-    def analyze(self, arrival_rate_rps: float) -> ComponentAnalysis:
+    def analyze(
+        self, arrival_rate_rps: float, backlog: float = 0.0
+    ) -> ComponentAnalysis:
         """Evaluate this component under a given arrival rate.
 
         Replicas are modelled as an even split: N replicas each form an
@@ -184,10 +211,31 @@ class Component(ABC):
         pessimistic than a true M/M/c pool, where replicas share one queue and
         can cover for each other, but it is far easier to reason about and still
         rewards horizontal scaling the way a learner expects.
+
+        `backlog` is the queue already waiting when this instant begins, summed
+        across replicas, and it splits the same even way. A request then spends
+        the steady-state M/M/1 time *plus* the time to clear its replica's share
+        of the pile. With nothing queued -- the default, and the whole of the
+        single-rate model -- the result is exactly the M/M/1 figure.
         """
         per_replica_arrival = arrival_rate_rps / self.replicas
+        per_replica_backlog = backlog / self.replicas
         per_instance_mu = self.per_instance_service_rate_rps
         rho = utilization(per_replica_arrival, per_instance_mu)
+
+        steady_latency = average_latency_seconds(per_replica_arrival, per_instance_mu)
+        if steady_latency is None:
+            # Saturated: no steady state exists, so no number is reported, and
+            # the offered load stays the measure of how far over capacity the
+            # component is. The backlog is still reported -- it is what the
+            # next second inherits.
+            latency = None
+            effective_rho = rho
+        else:
+            latency = steady_latency + backlog_wait_seconds(
+                per_replica_backlog, per_instance_mu
+            )
+            effective_rho = effective_utilization(latency, per_instance_mu)
 
         return ComponentAnalysis(
             node_id=self.node_id,
@@ -198,10 +246,10 @@ class Component(ABC):
             # way: (lambda/N) / mu == lambda / (N*mu).
             service_rate_rps=per_instance_mu * self.replicas,
             utilization=rho,
-            latency_seconds=average_latency_seconds(
-                per_replica_arrival, per_instance_mu
-            ),
-            status=_status_for(rho),
+            latency_seconds=latency,
+            backlog=backlog,
+            effective_utilization=effective_rho,
+            status=_status_for(effective_rho),
             downstream_rate_rps=self.downstream_rate_rps(arrival_rate_rps),
         )
 

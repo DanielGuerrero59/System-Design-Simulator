@@ -146,6 +146,93 @@ class TestStatusThresholds:
         assert analysis.latency_seconds is None
 
 
+class TestBacklog:
+    """A queue left over from an earlier second, handed in by the engine."""
+
+    def test_zero_backlog_is_the_plain_mm1_figure(self) -> None:
+        """mu 1,000 at 500 rps: rho 0.5, W 2 ms, and nothing queued to report."""
+        analysis = build_component(
+            spec(ComponentType.APP_SERVER, service_rate_rps=1_000.0)
+        ).analyze(500.0)
+        assert analysis.backlog == 0.0
+        assert analysis.latency_seconds == pytest.approx(0.002)
+        assert analysis.effective_utilization == pytest.approx(analysis.utilization)
+        assert analysis.status is NodeStatus.HEALTHY
+
+    def test_backlog_adds_its_drain_time_to_the_latency(self) -> None:
+        """mu 2,000 at 1,500 rps with 1,000 requests already queued.
+
+        Steady state is 1/(2,000 - 1,500) = 2 ms; the pile takes 1,000/2,000 =
+        0.5 s to clear, so a request spends 0.502 s. The offered load is still
+        rho 0.75 -- a warning on its own -- but the queue makes it critical:
+        rho_eff = 1 - 1/(2,000 * 0.502) = 1 - 1/1,004.
+        """
+        analysis = build_component(
+            spec(ComponentType.APP_SERVER, service_rate_rps=2_000.0)
+        ).analyze(1_500.0, backlog=1_000.0)
+        assert analysis.latency_seconds == pytest.approx(0.502)
+        assert analysis.utilization == pytest.approx(0.75)
+        assert analysis.effective_utilization == pytest.approx(1 - 1 / 1_004)
+        assert analysis.status is NodeStatus.CRITICAL
+        assert analysis.backlog == 1_000.0
+
+    def test_replicas_share_the_backlog_as_they_share_the_traffic(self) -> None:
+        """Two replicas at mu 2,000, 3,000 rps and a 1,000-request pile.
+
+        Each sees 1,500 rps and 500 queued: 2 ms steady state plus 500/2,000 =
+        0.25 s of drain. The backlog is reported as the user-facing aggregate.
+        """
+        analysis = build_component(
+            spec(ComponentType.APP_SERVER, replicas=2, service_rate_rps=2_000.0)
+        ).analyze(3_000.0, backlog=1_000.0)
+        assert analysis.latency_seconds == pytest.approx(0.252)
+        assert analysis.backlog == 1_000.0
+
+    @pytest.mark.parametrize(
+        ("backlog", "expected_effective", "expected_status"),
+        [
+            (0.0, 0.5, NodeStatus.HEALTHY),
+            (0.5, 0.6, NodeStatus.HEALTHY),  # W = 2 ms + 0.5 ms; 1 - 1/2.5
+            (2.0, 0.75, NodeStatus.WARNING),  # W = 2 ms + 2 ms; 1 - 1/4
+            (10.0, 1 - 1 / 12, NodeStatus.CRITICAL),  # W = 2 ms + 10 ms
+        ],
+    )
+    def test_status_follows_the_queue_not_the_rate(
+        self, backlog: float, expected_effective: float, expected_status: NodeStatus
+    ) -> None:
+        """mu 1,000 at 500 rps is rho 0.5 whatever is queued; the status is not."""
+        analysis = build_component(
+            spec(ComponentType.APP_SERVER, service_rate_rps=1_000.0)
+        ).analyze(500.0, backlog=backlog)
+        assert analysis.utilization == pytest.approx(0.5)
+        assert analysis.effective_utilization == pytest.approx(expected_effective)
+        assert analysis.status is expected_status
+
+    def test_saturated_reports_the_backlog_but_still_no_latency(self) -> None:
+        """Over capacity there is no steady state to add a drain time to."""
+        analysis = build_component(
+            spec(ComponentType.APP_SERVER, service_rate_rps=1_000.0)
+        ).analyze(1_500.0, backlog=700.0)
+        assert analysis.latency_seconds is None
+        assert analysis.status is NodeStatus.SATURATED
+        assert analysis.backlog == 700.0
+        # The offered load stays the measure of how far over capacity it is.
+        assert analysis.effective_utilization == pytest.approx(1.5)
+
+    def test_backlog_changes_the_wait_not_what_continues_downstream(self) -> None:
+        analysis = build_component(spec(ComponentType.CACHE)).analyze(
+            1_000.0, backlog=50.0
+        )
+        assert analysis.downstream_rate_rps == pytest.approx(
+            1_000.0 * (1 - DEFAULT_CACHE_HIT_RATIO)
+        )
+
+    @pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
+    def test_rejects_an_impossible_backlog(self, bad: float) -> None:
+        with pytest.raises(ValueError, match="backlog must be a non-negative finite number"):
+            build_component(spec(ComponentType.APP_SERVER)).analyze(500.0, backlog=bad)
+
+
 class TestSpecValidation:
     def test_rejects_zero_replicas(self) -> None:
         with pytest.raises(ValueError, match="replicas must be at least 1"):
