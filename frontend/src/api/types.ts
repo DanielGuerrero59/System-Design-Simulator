@@ -101,9 +101,17 @@ export interface NodeResult {
   /**
    * Null when saturated. The backend deliberately never sends a number here for
    * an overloaded component, because the true value is infinite rather than
-   * large -- so the UI must render "overloaded", never a figure.
+   * large -- so the UI must render "overloaded", never a figure. Includes the
+   * time to clear any backlog ahead of the request.
    */
   latency_ms: number | null
+  /**
+   * Requests queued beyond the steady state when this second began, summed
+   * across replicas. Zero unless an earlier second saturated this node. It
+   * drains at the spare capacity once the rate drops back, and while it does
+   * the node's status follows the latency the queue costs, not `utilization`.
+   */
+  backlog: number
   status: NodeStatus
 }
 
@@ -133,13 +141,20 @@ export interface TrafficSummary {
    */
   worst_step_index: number
   saturated_seconds: number
+  /**
+   * Seconds in which nothing was saturated but some node was still draining
+   * a backlog: the tail a burst leaves behind.
+   */
+  recovery_seconds: number
 }
 
 /**
  * The top-level fields are the WORST sample of the timeline -- for a steady
  * rate the only one, which is why code written against the single-rate
  * contract keeps reading them unchanged. Every sample is in `timeline`, each
- * an independent steady state: no queue carries over between seconds.
+ * a steady state at its own rate that starts from the backlog the previous
+ * second left: a burst is followed by a recovery tail, and a design that never
+ * saturates gets one independent steady state per second.
  */
 export interface SimulationResponse extends StepResult {
   traffic: TrafficSummary

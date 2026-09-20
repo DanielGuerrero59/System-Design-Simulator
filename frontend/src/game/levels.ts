@@ -30,11 +30,14 @@
  * would never bind and the objective would be free.
  *
  * Each level also owns the *shape* of its traffic. The dial sets the peak, and
- * every sample of a shaped run is judged as its own steady state, so the worst
- * second of a burst or a ramp is its peak -- which is exactly the rate the
- * arithmetic above was done at. Shapes change what the player watches, not
- * what the level demands. (That changes once queue backlog carries between
- * seconds; the tuning will need revisiting then.)
+ * the worst second of a burst or a ramp is its peak -- which is exactly the
+ * rate the arithmetic above was done at. Queue backlog carries from one second
+ * to the next, but it can only build while a component is saturated, and a
+ * design that clears a level keeps every component under 85% at the peak: it
+ * never saturates, so nothing ever queues, and the steady state at the peak is
+ * the whole story. A design that fails is judged at the first second it
+ * breaks; the tail that follows is what the player gets to watch. Shapes
+ * change what the player watches, not what the level demands.
  */
 
 import type { ComponentType } from '../api/types'
@@ -104,8 +107,10 @@ export const LEVELS: Level[] = [
       'Most of this traffic is reads, and for ten seconds it triples. The database will melt long before the servers do — and replicating it costs more than absorbing the reads.',
     targetRps: 9_000,
     // Twenty seconds at a third of the peak, ten seconds at the peak, thirty
-    // seconds back at baseline: room to see the before, the burst, and -- once
-    // backlog carries between seconds -- the recovery.
+    // seconds back at baseline: room to see the before, the burst, and the
+    // recovery. A lone database the burst saturates is 4,000 rps over capacity
+    // for ten seconds and takes twenty more to work off the 40,000 requests
+    // that leaves -- the tail is twice the burst, and the window shows all of it.
     traffic: {
       kind: 'spike',
       baselineFraction: 1 / 3,

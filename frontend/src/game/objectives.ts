@@ -12,10 +12,12 @@
  * `status`, not from comparing `utilization` against a threshold this file
  * keeps. The backend already classifies a component as critical at rho 0.85
  * (UTILIZATION_CRITICAL_THRESHOLD), and re-deriving that boundary here would
- * create a second copy free to disagree with the first.
+ * create a second copy free to disagree with the first. The same goes for a
+ * node still draining a backlog: the backend judges it by the latency that
+ * queue costs, and this file only reads the verdict.
  */
 
-import type { NodeResult, SimulationResponse } from '../api/types'
+import type { NodeResult, SimulationResponse, TimelineStep } from '../api/types'
 import { COMPONENT_CATALOG } from '../design/catalog'
 import {
   buildAdjacency,
@@ -99,6 +101,30 @@ const IDLE = '—' // em dash
  */
 function isComfortable(node: NodeResult): boolean {
   return node.status === 'healthy' || node.status === 'warning'
+}
+
+/** Stable, but still working off a queue an earlier second left behind. */
+function isRecovering(step: TimelineStep): boolean {
+  return step.is_stable && step.nodes.some((node) => node.backlog > 0)
+}
+
+/**
+ * The sentence about the tail, or nothing when there is none.
+ *
+ * Saturation is the headline; this is the consequence a flat rate could never
+ * show. A burst that breaks a component for ten seconds can cost twenty more
+ * of recovery, and the coach says so with the second the queue is finally
+ * clear -- or, if the window runs out first, that it never was.
+ */
+function describeRecovery(result: SimulationResponse): string {
+  const seconds = result.traffic.recovery_seconds
+  if (seconds <= 0) {
+    return ''
+  }
+  const clearAt = result.timeline[result.timeline.findLastIndex(isRecovering) + 1]
+  return clearAt === undefined
+    ? ` The queue it builds outlives the overload: ${seconds} s later it is still draining when the window ends.`
+    : ` The queue it builds outlives the overload by ${seconds} s — it is not clear until t = ${clearAt.t_seconds} s.`
 }
 
 function labelFor(nodes: readonly DesignNode[], nodeId: string | null): string {
@@ -285,7 +311,8 @@ function coach(input: CoachInput): string {
   if (saturated) {
     const name = labelFor(nodes, saturated.node_id)
     const when = worstSecond === null ? '' : `At t = ${worstSecond} s, `
-    return `${when}${name} is saturated — λ has caught up with μ, so its queue grows without bound and the latency is genuinely ∞, not a big number. Split the load across replicas, or put a cache in front to cut what reaches it.`
+    const tail = result === null ? '' : describeRecovery(result)
+    return `${when}${name} is saturated — λ has caught up with μ, so its queue grows without bound and the latency is genuinely ∞, not a big number.${tail} Split the load across replicas, or put a cache in front to cut what reaches it.`
   }
 
   if (!reachesDatabase) {

@@ -34,6 +34,7 @@ function step(
         service_rate_rps: 2_000,
         utilization: offeredRps / 2_000,
         latency_ms: totalLatencyMs,
+        backlog: 0,
         status,
       },
     ],

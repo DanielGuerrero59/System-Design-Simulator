@@ -20,8 +20,13 @@
  * unwinnable -- or free.
  *
  * Every run below is at the level's target, which is the *peak* of its traffic
- * shape. Judged one steady state per second, the peak is the worst second, so
- * a shaped level is cleared or failed at exactly the rate checked here.
+ * shape, as a single steady state. That is enough even though the backend
+ * carries queue backlog between seconds: backlog only builds while a component
+ * is saturated, and `clears` demands every component under 85% at the peak,
+ * so a clearing design never queues anything and its every second is the
+ * steady state at that second's rate. A failing design fails at the first
+ * second something saturates, which is the peak too. The tail after a burst
+ * changes what the player watches, never the verdict.
  */
 
 import { describe, expect, it } from 'vitest'

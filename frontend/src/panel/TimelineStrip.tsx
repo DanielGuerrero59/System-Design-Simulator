@@ -49,12 +49,18 @@ function ratePath(samples: ReturnType<typeof layoutTimeline>['samples']): string
 
 function describe(timeline: readonly TimelineStep[], worstIndex: number): string {
   const saturated = timeline.filter((step) => step.total_latency_ms === null)
+  const recovering = timeline.filter(
+    (step) =>
+      step.total_latency_ms !== null && step.nodes.some((node) => node.backlog > 0),
+  )
   const window = `${timeline.length} seconds of traffic`
   const worst = `worst second t = ${timeline[worstIndex]?.t_seconds ?? 0} s`
   if (saturated.length === 0) {
     return `${window}, never saturated; ${worst}.`
   }
-  return `${window}, saturated for ${saturated.length} s from t = ${saturated[0]!.t_seconds} s; ${worst}.`
+  const tail =
+    recovering.length === 0 ? '' : `, then draining for ${recovering.length} s`
+  return `${window}, saturated for ${saturated.length} s from t = ${saturated[0]!.t_seconds} s${tail}; ${worst}.`
 }
 
 export function TimelineStrip({

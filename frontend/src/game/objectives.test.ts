@@ -58,6 +58,7 @@ function nodeResult(
     service_rate_rps: 1000,
     utilization,
     latency_ms: 1,
+    backlog: 0,
     status,
   }
 }
@@ -77,6 +78,7 @@ function steady(step: StepResult): SimulationResponse {
       peak_rps: rps,
       worst_step_index: 0,
       saturated_seconds: 0,
+      recovery_seconds: 0,
     },
     timeline: [{ t_seconds: 0, offered_rps: rps, ...step }],
   }
@@ -96,10 +98,61 @@ function burst(step: StepResult, worstIndex: number): SimulationResponse {
       peak_rps: 9_000,
       worst_step_index: worstIndex,
       saturated_seconds: 1,
+      recovery_seconds: 0,
     },
     timeline: [0, 1, 2].map((t) => ({
       t_seconds: t,
       offered_rps: t === worstIndex ? 9_000 : 3_000,
+      ...step,
+    })),
+  }
+}
+
+/**
+ * A burst that breaks the app tier at t = 1 and leaves it draining: the
+ * seconds after are stable but still red, with a queue in front of them, and
+ * the first clean second is the one after the last with any backlog. The
+ * window can end before that happens.
+ */
+function burstWithTail(
+  saturated: StepResult,
+  recoveringSeconds: number,
+  clearsWithinWindow: boolean,
+): SimulationResponse {
+  const recovering: StepResult = {
+    is_stable: true,
+    total_latency_ms: 502,
+    bottleneck_node_id: 'api-1',
+    nodes: [
+      { ...nodeResult('api-1', 0.75, 'critical'), latency_ms: 502, backlog: 1_000 },
+      nodeResult('db-1', 0.4, 'healthy'),
+    ],
+  }
+  const clean: StepResult = {
+    is_stable: true,
+    total_latency_ms: 2,
+    bottleneck_node_id: 'api-1',
+    nodes: [nodeResult('api-1', 0.75, 'warning'), nodeResult('db-1', 0.4)],
+  }
+  const steps: StepResult[] = [
+    clean,
+    saturated,
+    ...Array.from({ length: recoveringSeconds }, () => recovering),
+    ...(clearsWithinWindow ? [clean] : []),
+  ]
+  return {
+    ...saturated,
+    traffic: {
+      kind: 'spike',
+      duration_seconds: steps.length - 1,
+      peak_rps: 9_000,
+      worst_step_index: 1,
+      saturated_seconds: 1,
+      recovery_seconds: recoveringSeconds,
+    },
+    timeline: steps.map((step, t) => ({
+      t_seconds: t,
+      offered_rps: t === 1 ? 9_000 : 3_000,
       ...step,
     })),
   }
@@ -485,5 +538,56 @@ describe('traffic shapes', () => {
     )
 
     expect(assessment.tip).toMatch(/^api-1 is saturated/)
+  })
+
+  it('says how long the queue outlives the burst, and when it is clear', () => {
+    const assessment = assess(
+      input({
+        ...wired,
+        level: READ_STORM,
+        peakRps: READ_STORM.targetRps,
+        // Saturated at t = 1, draining through t = 2 and 3, clean at t = 4.
+        result: burstWithTail(saturatedApp, 2, true),
+        isRunning: true,
+      }),
+    )
+
+    expect(assessment.tip).toMatch(/^At t = 1 s, api-1 is saturated/)
+    expect(assessment.tip).toContain(
+      'outlives the overload by 2 s — it is not clear until t = 4 s.',
+    )
+    // The tail is context for the verdict, not the verdict: the advice about
+    // replicas and caches still follows.
+    expect(assessment.tip).toMatch(/Split the load across replicas/)
+  })
+
+  it('says the queue is still draining when the window ends first', () => {
+    const assessment = assess(
+      input({
+        ...wired,
+        level: READ_STORM,
+        peakRps: READ_STORM.targetRps,
+        result: burstWithTail(saturatedApp, 3, false),
+        isRunning: true,
+      }),
+    )
+
+    expect(assessment.tip).toContain(
+      '3 s later it is still draining when the window ends.',
+    )
+  })
+
+  it('does not mention a tail when nothing was left queued', () => {
+    const assessment = assess(
+      input({
+        ...wired,
+        level: READ_STORM,
+        peakRps: READ_STORM.targetRps,
+        result: burst(saturatedApp, 1),
+        isRunning: true,
+      }),
+    )
+
+    expect(assessment.tip).not.toMatch(/outlives|draining/)
   })
 })
