@@ -26,13 +26,33 @@ import {
   reachableFrom,
 } from '../design/graph'
 import type { DesignEdge, DesignNode } from '../design/types'
-import { formatLatency, formatRate } from '../format'
+import { formatLatency, formatPercent, formatRate } from '../format'
 import type { Level } from './levels'
 import { TARGET_VERB } from './traffic'
 
 export type VerdictTone = 'cleared' | 'failing' | 'idle'
 
+/**
+ * Which goal an objective is. The label changes with the level ("Serve 2,400
+ * rps", "Peak of 9,000 rps"); this does not, so it is what a row is keyed by
+ * and what `objectiveGuide.ts` explains.
+ */
+export type ObjectiveId =
+  | 'rate'
+  | 'reaches-database'
+  | 'headroom'
+  | 'latency'
+  | 'budget'
+
+/**
+ * The utilisation every node has to stay under, for the label and its guide.
+ * Display only: mirrors UTILIZATION_CRITICAL_THRESHOLD, and the check itself
+ * reads each node's `status` rather than comparing against this (see above).
+ */
+export const COMFORT_CEILING = 0.85
+
 export interface Objective {
+  id: ObjectiveId
   label: string
   /** The player's current figure, or an em dash before anything has run. */
   value: string
@@ -193,26 +213,31 @@ export function assess(input: AssessmentInput): Assessment {
 
   const objectives: Objective[] = [
     {
+      id: 'rate',
       label: `${TARGET_VERB[level.traffic.kind]} ${formatRate(level.targetRps)}`,
       value: formatRate(peakRps),
       isMet: hitsTarget,
     },
     {
+      id: 'reaches-database',
       label: 'Traffic reaches the database',
       value: reachesDatabase ? 'wired' : 'no path',
       isMet: reachesDatabase,
     },
     {
-      label: 'Every node under 85%',
+      id: 'headroom',
+      label: `Every node under ${formatPercent(COMFORT_CEILING)}`,
       value: busiestPercent,
       isMet: live && allComfortable,
     },
     {
+      id: 'latency',
       label: `Slowest path under ${level.latencyCapMs} ms`,
       value: latencyValue,
       isMet: live && isFastEnough,
     },
     {
+      id: 'budget',
       label: `Budget ${level.budgetCredits} credits`,
       value: `${costCredits}`,
       isMet: isInBudget,

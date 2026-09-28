@@ -390,6 +390,19 @@ describe('the other win conditions', () => {
   })
 })
 
+describe('objective identity', () => {
+  it('keys each row by the goal, not its level-specific label', () => {
+    const assessment = assess(input())
+    expect(assessment.objectives.map((row) => [row.id, row.label])).toEqual([
+      ['rate', 'Serve 2,400 rps'],
+      ['reaches-database', 'Traffic reaches the database'],
+      ['headroom', 'Every node under 85%'],
+      ['latency', 'Slowest path under 4 ms'],
+      ['budget', 'Budget 12 credits'],
+    ])
+  })
+})
+
 describe('objective figures do not contradict the check beside them', () => {
   const wired = {
     nodes: [node('api-1', 'app_server'), node('db-1', 'database')],

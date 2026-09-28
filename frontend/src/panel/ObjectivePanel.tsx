@@ -7,6 +7,7 @@
  * alter what counts as clearing one.
  */
 
+import { useRef, type RefObject } from 'react'
 import {
   ArrowCounterClockwise,
   CheckCircle,
@@ -17,9 +18,12 @@ import {
 } from '@phosphor-icons/react'
 
 import type { TimelineStep } from '../api/types'
-import type { Assessment } from '../game/objectives'
+import { guideFor } from '../game/objectiveGuide'
+import type { Assessment, Objective } from '../game/objectives'
 import type { Level } from '../game/levels'
 import { formatRate, latencyParts } from '../format'
+import type { AnchorBox } from '../info/flyoutPlacement'
+import { InfoFlyout, InfoSection } from '../info/InfoFlyout'
 import { TimelineStrip } from './TimelineStrip'
 
 export interface ObjectivePanelProps {
@@ -55,6 +59,7 @@ export function ObjectivePanel({
 }: ObjectivePanelProps) {
   const { objectives, isCleared, verdictText, verdictTone, tip, bottleneck } =
     assessment
+  const panelRef = useRef<HTMLElement>(null)
 
   const focusedStep =
     focusedStepIndex !== null && timeline !== null
@@ -73,6 +78,7 @@ export function ObjectivePanel({
 
   return (
     <aside
+      ref={panelRef}
       className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-l border-divider
                  px-3.5 pt-3.5 pb-4"
     >
@@ -88,25 +94,12 @@ export function ObjectivePanel({
 
       <div className="flex flex-col gap-px">
         {objectives.map((objective) => (
-          <div
-            key={objective.label}
-            className="grid grid-cols-[16px_1fr_auto] items-center gap-2 border-t
-                       border-divider py-[7px]"
-          >
-            {objective.isMet ? (
-              <CheckCircle size={13} className="text-status-healthy" />
-            ) : (
-              <CircleDashed size={13} className="text-neutral-600" />
-            )}
-            <span className="text-xs text-neutral-300">{objective.label}</span>
-            <span
-              className={`font-heading text-xs font-medium tabular-nums ${
-                objective.isMet ? 'text-status-healthy' : 'text-neutral-600'
-              }`}
-            >
-              {objective.value}
-            </span>
-          </div>
+          <ObjectiveRow
+            key={objective.id}
+            objective={objective}
+            level={level}
+            panelRef={panelRef}
+          />
         ))}
       </div>
 
@@ -215,5 +208,72 @@ export function ObjectivePanel({
         Reset level
       </button>
     </aside>
+  )
+}
+
+interface ObjectiveRowProps {
+  objective: Objective
+  level: Level
+  /** The panel whose edge the goal's flyout opens against. */
+  panelRef: RefObject<HTMLElement | null>
+}
+
+/**
+ * One goal: whether it is met, what it asks, the player's figure, and an info
+ * button that explains it. The flyout opens leftward over the canvas, since
+ * the panel sits against the window's right edge.
+ */
+function ObjectiveRow({ objective, level, panelRef }: ObjectiveRowProps) {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const guide = guideFor(objective.id, level)
+
+  const locateAnchor = (): AnchorBox | null => {
+    const row = rowRef.current
+    const panel = panelRef.current
+    if (row === null || panel === null) {
+      return null
+    }
+    const { top, bottom } = row.getBoundingClientRect()
+    return { top, bottom, edge: panel.getBoundingClientRect().left }
+  }
+
+  return (
+    <div
+      ref={rowRef}
+      className="grid grid-cols-[16px_1fr_auto] items-center gap-2 border-t
+                 border-divider py-[7px]"
+    >
+      {objective.isMet ? (
+        <CheckCircle size={13} className="text-status-healthy" />
+      ) : (
+        <CircleDashed size={13} className="text-neutral-600" />
+      )}
+      <div className="flex min-w-0 items-center gap-0.5">
+        <span className="text-xs text-neutral-300">{objective.label}</span>
+        {/* Negative margins keep the 20px hit area without the 20px footprint:
+            vertically so the row is no taller than its text makes it, and on
+            the right so the button overhangs the column gap. Without the
+            latter, "Traffic reaches the database" beside "no path" is 2px too
+            wide for its cell and wraps onto a second line. */}
+        <InfoFlyout
+          label={`${objective.label}: what this goal means`}
+          title={objective.label}
+          side="left"
+          locateAnchor={locateAnchor}
+          className="-my-1 -mr-1"
+        >
+          <InfoSection caption="What it means">{guide.meaning}</InfoSection>
+          <InfoSection caption="Why it matters">{guide.whyItMatters}</InfoSection>
+          <InfoSection caption="How to meet it">{guide.howToMeetIt}</InfoSection>
+        </InfoFlyout>
+      </div>
+      <span
+        className={`font-heading text-xs font-medium tabular-nums ${
+          objective.isMet ? 'text-status-healthy' : 'text-neutral-600'
+        }`}
+      >
+        {objective.value}
+      </span>
+    </div>
   )
 }

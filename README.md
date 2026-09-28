@@ -87,10 +87,10 @@ changed, not that it was right to begin with.
 cd frontend && npm test
 ```
 
-126 tests on the pure layers: the game's win conditions, the graph questions the
-UI answers without asking the backend, request building, node and flyout
-placement, number formatting, and the claims each part's info makes about its
-numbers. No DOM, so they run in about a second.
+151 tests on the pure layers: the game's win conditions, the graph questions the
+UI answers without asking the backend, request building, port and flyout
+placement, number formatting, and the claims the parts' and goals' info makes
+about the numbers. No DOM, so they run in about a second.
 
 The same discipline applies. `game/levels.test.ts` writes out the M/M/1
 formulas rather than importing them, so each level is checked against the model
@@ -188,10 +188,11 @@ backend/app/
 frontend/src/
   api/              types mirroring the Pydantic schemas; the only module that calls fetch
   design/           the diagram store — what the user drew, and nothing else
-  game/             levels, objectives, and the verdict; all the rules in one place
+  game/             levels, objectives, the verdict, and what each goal means; all the rules in one place
   canvas/           React Flow wiring, the component card, the traffic source
-  sidebar/          the parts bin, and the info flyout that says what each part does
+  sidebar/          the parts bin, and what each part does
   panel/            objectives, the slowest-path figure and its second-by-second strip, the coaching line
+  info/             the info button and flyout the parts bin and the objectives share
   simulation-results/  the result store and the heat ramp
 ```
 
