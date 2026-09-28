@@ -17,7 +17,7 @@ import {
   type ComponentDefinition,
 } from '../design/catalog'
 import type { ComponentType } from '../api/types'
-import type { AnchorBox } from './flyoutPlacement'
+import type { AnchorBox } from '../info/flyoutPlacement'
 import { PartInfo } from './PartInfo'
 
 export interface PartsBinProps {
@@ -76,7 +76,7 @@ function PartCard({ part, binRef, onAdd, disabled }: PartCardProps) {
       return null
     }
     const { top, bottom } = card.getBoundingClientRect()
-    return { top, bottom, right: bin.getBoundingClientRect().right }
+    return { top, bottom, edge: bin.getBoundingClientRect().right }
   }
 
   return (
