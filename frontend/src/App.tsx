@@ -16,7 +16,7 @@ import { designCost } from './design/catalog'
 import { buildSimulationRequest } from './design/request'
 import { useDesign } from './design/useDesign'
 import { describeDesignProblem } from './design/validate'
-import { LEVELS, levelAt } from './game/levels'
+import { LEVELS, levelAt, levelTabLabel } from './game/levels'
 import { assess } from './game/objectives'
 import { DIAL_LABEL, trafficFor } from './game/traffic'
 import { ObjectivePanel } from './panel/ObjectivePanel'
@@ -172,7 +172,7 @@ export default function App() {
                                 : 'border-transparent text-neutral-500 hover:bg-accent-900'
                             }`}
               >
-                {candidate.name}
+                {levelTabLabel(index, candidate)}
               </button>
             ))}
           </div>

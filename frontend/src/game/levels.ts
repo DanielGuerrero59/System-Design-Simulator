@@ -142,6 +142,17 @@ export const LEVELS: Level[] = [
   },
 ]
 
+/**
+ * A level's header tab: "Level 1: Hello, traffic".
+ *
+ * Numbered from its place in LEVELS rather than parsed out of `kicker`, so the
+ * tabs count 1, 2, 3 in the order they are drawn whatever the kickers say --
+ * and `levels.test.ts` checks the kickers say the same.
+ */
+export function levelTabLabel(index: number, level: Pick<Level, 'name'>): string {
+  return `Level ${index + 1}: ${level.name}`
+}
+
 /** Clamp an arbitrary index onto a real level, for the `startLevel` prop. */
 export function levelAt(index: number): Level {
   const clamped = Math.max(0, Math.min(LEVELS.length - 1, index))

@@ -34,7 +34,7 @@ import { describe, expect, it } from 'vitest'
 import type { ComponentType } from '../api/types'
 import { COMPONENT_CATALOG } from '../design/catalog'
 import { MAX_TRAFFIC_DURATION_SECONDS } from '../design/limits'
-import { LEVELS } from './levels'
+import { LEVELS, levelTabLabel } from './levels'
 
 /** Mirrors DEFAULT_CACHE_HIT_RATIO in backend/app/simulation/constants.py. */
 const CACHE_HIT_RATIO = 0.8
@@ -272,6 +272,26 @@ describe('level data is internally consistent', () => {
       )
 
       expect(seedCost).toBeLessThanOrEqual(level.budgetCredits)
+    },
+  )
+})
+
+describe('level numbering', () => {
+  it('numbers the header tabs in the order they are drawn', () => {
+    expect(LEVELS.map((level, index) => levelTabLabel(index, level))).toEqual([
+      'Level 1: Hello, traffic',
+      'Level 2: Read storm',
+      'Level 3: Black friday',
+    ])
+  })
+
+  it.each(LEVELS.map((level, index) => [level.name, level, index] as const))(
+    '%s has a kicker with the number its tab shows',
+    (_name, level, index) => {
+      // The panel reads "Level 01" under a tab reading "Level 1:". A reorder
+      // that renumbered one and not the other would put two numbers on
+      // screen for the same level.
+      expect(level.kicker).toBe(`Level ${String(index + 1).padStart(2, '0')}`)
     },
   )
 })
