@@ -156,6 +156,18 @@
   }
 }
 
+/* A canvas node's entrance. Opacity only: React Flow measures a node's ports
+   on its first frame, so any movement in the entrance is measured with it and
+   every wire to that node lands off its dot. */
+@keyframes nx-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* The traffic dial. Range inputs cannot be styled through Tailwind utilities
    -- the track and thumb are shadow-DOM pseudo-elements -- so they are written
    out here against the same tokens. */
@@ -194,10 +206,38 @@ input[type='range']::-moz-range-thumb {
   background: var(--color-bg);
 }
 
+/* A port is its coloured dot; size and colour come from `portStyle` in
+   canvas/ports.ts. The ring that cuts it out of the card's outline is a
+   shadow, not a border: React Flow attaches wires to the outside of the box it
+   measures, and as a border the ring left two pixels of canvas between every
+   wire and its dot. */
 .react-flow__handle {
-  border: 2px solid var(--color-bg);
-  width: 14px;
-  height: 14px;
+  border: none;
+  box-shadow: 0 0 0 2px var(--color-bg);
+}
+
+/* A grab area wider than the 10px dot, so starting a wire does not take aim.
+   A pointer on the pseudo-element is a pointer on the handle. */
+.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
+
+/* The port a dragged wire will land on if let go now. */
+.react-flow__handle.connectingto.valid {
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 5px color-mix(in srgb, var(--color-accent) 55%, transparent);
+}
+
+/* A port the wire is over but may not use -- it would close a loop, or join a
+   node to itself. Said at the port, before the release quietly does nothing. */
+.react-flow__handle.connectingto:not(.valid) {
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 5px color-mix(in srgb, var(--color-status-saturated) 55%, transparent);
 }
 
 .react-flow__attribution {

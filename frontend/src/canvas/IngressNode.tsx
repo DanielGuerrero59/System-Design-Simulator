@@ -17,6 +17,8 @@ import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { UsersThree } from '@phosphor-icons/react'
 
+import { portStyle } from './ports'
+
 export const IngressNode = memo(function IngressNode() {
   return (
     <div
@@ -31,12 +33,14 @@ export const IngressNode = memo(function IngressNode() {
         Traffic
       </span>
       {/* Present only so an edge has something to leave from; the node is not
-          connectable, so it can never be wired by hand. */}
+          connectable, so it can never be wired by hand. Where React Flow
+          thinks this dot is comes from `rightSourcePort` in DesignCanvas, not
+          from measuring it -- the two agree because both use ports.ts. */}
       <Handle
         type="source"
         position={Position.Right}
         isConnectable={false}
-        style={{ background: 'var(--color-accent)' }}
+        style={portStyle('var(--color-accent)')}
       />
     </div>
   )

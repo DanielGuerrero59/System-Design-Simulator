@@ -28,6 +28,7 @@ import {
   tintFor,
 } from '../simulation-results/statusStyles'
 import { useNodeCallbacks } from './nodeCallbacks'
+import { portStyle } from './ports'
 
 const NODE_WIDTH = 152
 
@@ -67,19 +68,25 @@ export const ComponentNode = memo(function ComponentNode({
     // Two elements, one animation each, and that split is load-bearing.
     //
     // `animation` is a single property: changing the list restarts every
-    // animation in it. With the mount slide-in and the alarm shake sharing one
-    // element, each crossing of the danger threshold re-ran `nx-in` and the
-    // card visibly jumped. That is constant here in a way it would not be in a
+    // animation in it. With the mount entrance and the alarm shake sharing one
+    // element, each crossing of the danger threshold re-ran the entrance and
+    // the card visibly jumped. That is constant here in a way it would not be in a
     // static mockup -- the traffic dial re-simulates as it moves, so dragging
     // it past 85% flickers every node it touches.
     //
     // Held apart, the outer element's animation never changes after mount and
     // the inner one is free to toggle.
-    <div style={{ width: NODE_WIDTH, animation: 'nx-in 0.18s ease-out' }}>
+    //
+    // The entrance fades rather than slides. React Flow measures where the
+    // ports are once, on the node's first frame -- the first frame of its
+    // entrance -- and never again while its size holds. A slide that started
+    // 6px low was measured 6px low, and every wire to a part placed from the
+    // bin met it below its dot.
+    <div style={{ width: NODE_WIDTH, animation: 'nx-fade-in 0.18s ease-out' }}>
       <Handle
         type="target"
         position={Position.Left}
-        style={{ background: 'var(--color-neutral-700)' }}
+        style={portStyle('var(--color-neutral-700)')}
       />
       <div
         style={{
@@ -165,7 +172,7 @@ export const ComponentNode = memo(function ComponentNode({
       <Handle
         type="source"
         position={Position.Right}
-        style={{ background: 'var(--color-accent-600)' }}
+        style={portStyle('var(--color-accent-600)')}
       />
     </div>
   )

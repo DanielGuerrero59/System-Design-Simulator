@@ -87,7 +87,7 @@ changed, not that it was right to begin with.
 cd frontend && npm test
 ```
 
-123 tests on the pure layers: the game's win conditions, the graph questions the
+126 tests on the pure layers: the game's win conditions, the graph questions the
 UI answers without asking the backend, request building, node and flyout
 placement, number formatting, and the claims each part's info makes about its
 numbers. No DOM, so they run in about a second.

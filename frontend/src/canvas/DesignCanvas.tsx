@@ -26,11 +26,24 @@ import type { DesignStore } from '../design/useDesign'
 import type { OutcomeLookup } from '../simulation-results/outcomes'
 import { tintFor } from '../simulation-results/statusStyles'
 import { ComponentNode } from './ComponentNode'
+import { ConnectionWire } from './ConnectionWire'
 import { INGRESS_NODE_ID, INGRESS_SIZE } from './ingress'
 import { IngressNode } from './IngressNode'
 import { NodeCallbacksProvider } from './nodeCallbacks'
+import { rightSourcePort } from './ports'
 
 const IDLE_STROKE = 'var(--color-neutral-700)'
+const IDLE_STROKE_WIDTH = 1.6
+const LIVE_STROKE_WIDTH = 2.4
+
+/**
+ * A wire being dragged: the idle wire's weight, in the colour of the port it
+ * was pulled from, so it reads as in hand until it is let go.
+ */
+const DRAGGED_WIRE_STYLE = {
+  stroke: 'var(--color-accent-500)',
+  strokeWidth: IDLE_STROKE_WIDTH,
+}
 
 /** How far to the left of the entry component the traffic source sits. */
 const INGRESS_OFFSET_X = 190
@@ -90,7 +103,7 @@ export function DesignCanvas({
       if (!outcome) {
         return {
           ...edge,
-          style: { stroke: IDLE_STROKE, strokeWidth: 1.6 },
+          style: { stroke: IDLE_STROKE, strokeWidth: IDLE_STROKE_WIDTH },
         }
       }
 
@@ -99,7 +112,7 @@ export function DesignCanvas({
         ...edge,
         style: {
           stroke,
-          strokeWidth: 2.4,
+          strokeWidth: LIVE_STROKE_WIDTH,
           strokeDasharray: '6 6',
           animation: `nx-flow ${flowDuration(outcome.utilization)}s linear infinite`,
         },
@@ -143,6 +156,12 @@ export function DesignCanvas({
       // Stating the size skips the measurement entirely.
       width: INGRESS_SIZE.width,
       height: INGRESS_SIZE.height,
+      // The port too, for the same reason. This object is rebuilt on every
+      // design change, and React Flow discards a node's measured ports each
+      // time it is handed a new one with no measurement of its own. The wire
+      // to the entry component was in the edge list the whole time and never
+      // drawn: an edge whose end has no known port is skipped, silently.
+      handles: [rightSourcePort(INGRESS_SIZE)],
       draggable: false,
       selectable: false,
       deletable: false,
@@ -210,11 +229,11 @@ export function DesignCanvas({
         style: outcome
           ? {
               stroke,
-              strokeWidth: 2.4,
+              strokeWidth: LIVE_STROKE_WIDTH,
               strokeDasharray: '6 6',
               animation: `nx-flow ${flowDuration(outcome.utilization)}s linear infinite`,
             }
-          : { stroke: IDLE_STROKE, strokeWidth: 1.6 },
+          : { stroke: IDLE_STROKE, strokeWidth: IDLE_STROKE_WIDTH },
       } as Edge,
       ...styledEdges,
     ]
@@ -230,6 +249,12 @@ export function DesignCanvas({
         onEdgesChange={design.onEdgesChange}
         onConnect={design.onConnect}
         isValidConnection={design.isValidConnection}
+        connectionLineComponent={ConnectionWire}
+        connectionLineStyle={DRAGGED_WIRE_STYLE}
+        // Arrowheads with no colour of their own take this one. React Flow's
+        // default is a light grey, which put a pale tip on every darker idle
+        // wire; live wires set theirs to the heat colour explicitly.
+        defaultMarkerColor={IDLE_STROKE}
         // Clicking a wire selects it; Backspace then cuts it. The design calls for
         // "click a wire to cut it", and this is that with a confirmation keystroke
         // -- a stray click on a path should not silently redesign the system.
