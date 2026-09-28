@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatLatency,
+  formatPercent,
   formatQueue,
   formatRate,
   formatShortLatency,
@@ -84,5 +85,18 @@ describe('formatQueue', () => {
   it('counts the requests waiting', () => {
     expect(formatQueue(40_000)).toBe('40,000 queued')
     expect(formatQueue(1_000.0000001)).toBe('1,000 queued')
+  })
+})
+
+describe('formatPercent', () => {
+  it('prints a fraction as a whole percentage', () => {
+    expect(formatPercent(0.8)).toBe('80%')
+    expect(formatPercent(1)).toBe('100%')
+  })
+
+  it('rounds a subtraction back to the number it means', () => {
+    // 1 - 0.8 is 0.19999999999999996 in binary floating point. Truncating
+    // would print a cache's miss share as 19%.
+    expect(formatPercent(1 - 0.8)).toBe('20%')
   })
 })

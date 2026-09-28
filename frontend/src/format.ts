@@ -90,6 +90,17 @@ export function formatRate(requestsPerSecond: number): string {
   return `${Math.round(requestsPerSecond).toLocaleString()} rps`
 }
 
+/**
+ * A fraction as a whole percentage: 0.8 -> "80%".
+ *
+ * Rounded, not truncated, because the fractions worth printing are often the
+ * result of a subtraction: 1 - 0.8 is 0.19999999999999996, and `Math.floor`
+ * of that times 100 is 19.
+ */
+export function formatPercent(fraction: number): string {
+  return `${Math.round(fraction * 100)}%`
+}
+
 /** A backlog, as the count of requests waiting: "40,000 queued". */
 export function formatQueue(requests: number): string {
   return `${Math.round(requests).toLocaleString()} queued`
